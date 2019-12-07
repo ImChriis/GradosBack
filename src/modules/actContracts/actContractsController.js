@@ -290,8 +290,8 @@ exports.addUserToAct = async (req, res) => {
 };
 
 exports.updateActUser = async (req, res) => {
-    const { CodigoActo, NuCedula, } = req.params;
-    const {  NoContrato, Chemise } = req.body;
+    const { CodigoActo, NuCedula } = req.params;
+    const { NoContrato, Chemise } = req.body;
 
     // Validar parámetros requeridos para identificar el registro
     if (!CodigoActo || !NuCedula) {
@@ -306,7 +306,7 @@ exports.updateActUser = async (req, res) => {
     try {
         await connection.beginTransaction();
 
-        // --- PASO 1: Verificar que el registro exista ---
+        // --- PASO 1: Verificar que el registro exista y obtener el NoContrato actual ---
         const [existente] = await connection.execute(
             "SELECT NoContrato FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?", 
             [CodigoActo, NuCedula]
@@ -320,12 +320,16 @@ exports.updateActUser = async (req, res) => {
             });
         }
 
+        const contratoAnterior = existente[0].NoContrato;
+        const contratoNuevo = NoContrato ? parseInt(NoContrato) : null;
+        const requiereCambioContrato = contratoNuevo && contratoNuevo !== contratoAnterior;
+
         // --- PASO 2: Si cambia NoContrato, validar contra límite de Configuración ---
-        if (NoContrato && NoContrato !== existente[0].NoContrato) {
+        if (requiereCambioContrato) {
             const [resConfig] = await connection.execute("SELECT NoContrato FROM Configuracion LIMIT 1");
             const contratoLimite = parseInt(resConfig[0]?.NoContrato || 0);
 
-            if (parseInt(NoContrato) > contratoLimite) {
+            if (contratoNuevo > contratoLimite) {
                 await connection.rollback();
                 return res.status(400).json({ 
                     status: 'error', 
@@ -334,8 +338,8 @@ exports.updateActUser = async (req, res) => {
             }
         }
 
-        // --- PASO 3: Actualizar solo los campos deseados (Chemise y/o NoContrato) ---
-        const sqlUpdate = `
+        // --- PASO 3: Actualizar el registro principal (DeActosGrados) ---
+        const sqlUpdateMain = `
             UPDATE DeActosGrados 
             SET 
                 Chemise = COALESCE(?, Chemise),
@@ -343,20 +347,37 @@ exports.updateActUser = async (req, res) => {
             WHERE CodigoActo = ? AND NuCedula = ?
         `;
 
-        const params = [
+        await connection.execute(sqlUpdateMain, [
             Chemise ?? null,
             NoContrato ?? null,
             CodigoActo,
             NuCedula
-        ];
+        ]);
 
-        await connection.execute(sqlUpdate, params);
+        // --- PASO 4: Si cambió el NoContrato, actualizar en ReciboPago y Depositos ---
+        if (requiereCambioContrato) {
+            // Actualizar en ReciboPago
+            const sqlUpdateRecibos = `
+                UPDATE ReciboPago 
+                SET NoContrato = ? 
+                WHERE NuCedula = ? AND NoContrato = ?
+            `;
+            await connection.execute(sqlUpdateRecibos, [contratoNuevo, NuCedula, contratoAnterior]);
+
+            // Actualizar en Depositos
+            const sqlUpdateDepositos = `
+                UPDATE Depositos 
+                SET NoContrato = ? 
+                WHERE NuCedula = ? AND NoContrato = ?
+            `;
+            await connection.execute(sqlUpdateDepositos, [contratoNuevo, NuCedula, contratoAnterior]);
+        }
 
         await connection.commit();
 
         res.json({ 
             status: 'success', 
-            message: "Registro actualizado correctamente." 
+            message: "Registro y tablas asociadas actualizados correctamente." 
         });
 
     } catch (error) {
@@ -601,7 +622,7 @@ exports.createDeposito = async (req, res) => {
     const { NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal } = req.body;
 
     try {
-        // 1. Insertar el depósito normal
+        // 1. Insertar el depósito
         const sqlInsert = `
             INSERT INTO Depositos (
                 NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal
@@ -611,11 +632,12 @@ exports.createDeposito = async (req, res) => {
             NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal
         ]);
 
-        // 2. Asignar MnInicial al contrato ÚNICAMENTE si está nulo
+        // 2. Asignar MnInicial al contrato ÚNICAMENTE si aún es NULL o 0 (primer depósito)
         const sqlUpdateContrato = `
             UPDATE deactosgrados 
             SET MnInicial = ? 
-            WHERE NoContrato = ?
+            WHERE NoContrato = ? 
+              AND (MnInicial IS NULL OR MnInicial = 0)
         `;
         await db.query(sqlUpdateContrato, [MnDeposito, NoContrato]);
 
@@ -632,7 +654,8 @@ exports.createDeposito = async (req, res) => {
             details: error.message 
         });
     }
-}
+};
+
 exports.updateTotals = async (req, res) => {
     const { CodigoActo, NuCedula } = req.params;
     const { MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial } = req.body;
@@ -665,9 +688,10 @@ exports.printReciboPdf = async (req, res) => {
         });
     }
 
+    // DIMENSIONES VERTICALES (Half Letter Portrait: Ancho 396 pt, Alto 612 pt)
     const doc = new PDFDocument({
-        size: [612, 396],
-        margins: { top: 25, bottom: 20, left: 28, right: 28 },
+        size: [396, 612],
+        margins: { top: 20, bottom: 20, left: 20, right: 20 },
         bufferPages: true
     });
 
@@ -675,8 +699,10 @@ exports.printReciboPdf = async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename=recibo-${NoRecibo}.pdf`);
     doc.pipe(res);
 
-    const pageWidth = 612;
-    const contentWidth = pageWidth - 56;
+    const pageWidth = 396;
+    const marginLeft = 20;
+    const marginRight = 376;
+    const contentWidth = pageWidth - 40; // 356 pt útiles
     const logoPath = path.join(__dirname, 'logo.png');
 
     const formatMoney = (value) => {
@@ -692,21 +718,21 @@ exports.printReciboPdf = async (req, res) => {
         return date.toLocaleDateString('es-VE');
     };
 
-    const getTextHeight = (text, width, fontSize = 10, font = 'Helvetica') => {
+    const getTextHeight = (text, width, fontSize = 8.5, font = 'Helvetica') => {
         doc.fontSize(fontSize).font(font);
         return doc.heightOfString(String(text ?? ''), { width });
     };
 
     const addHeader = (title) => {
         try {
-            doc.image(logoPath, 28, 22, { width: 48 });
+            doc.image(logoPath, marginLeft, 18, { width: 42 });
         } catch (error) {
-            console.log('Error logo');
+            console.log('Error cargando logo');
         }
 
         doc.fontSize(8).font('Helvetica-Bold')
-            .text("Grado`s de Venezuela, C.A.", 90, 24)
-            .font('Helvetica').text("J-30591547-4", 90, 35);
+            .text("Grado`s de Venezuela, C.A.", 68, 20)
+            .font('Helvetica').text("J-30591547-4", 68, 30);
 
         const fechaActual = new Date().toLocaleDateString('es-VE');
         const horaActual = new Date().toLocaleTimeString('es-VE', {
@@ -715,27 +741,29 @@ exports.printReciboPdf = async (req, res) => {
             hour12: true
         });
 
-        doc.fontSize(7.5).font('Helvetica')
-            .text(`Fecha: ${fechaActual}`, 420, 22, { align: 'right', width: 164 })
-            .text(`Hora: ${horaActual}`, 420, 32, { align: 'right', width: 164 })
-            .text(`Usuario: ${usuarioReporte || ''}`, 420, 42, { align: 'right', width: 164 });
+        doc.fontSize(7).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 220, 18, { align: 'right', width: 156, lineBreak: false })
+            .text(`Hora: ${horaActual}`, 220, 27, { align: 'right', width: 156, lineBreak: false })
+            .text(`Usuario: ${usuarioReporte || ''}`, 220, 36, { align: 'right', width: 156, lineBreak: false });
 
-        doc.moveTo(28, 60).lineTo(584, 60).lineWidth(0.5).stroke();
-        doc.fontSize(11).font('Helvetica-Bold').text(title, 28, 68, { align: 'center', width: 556 });
-        doc.moveTo(28, 86).lineTo(584, 86).lineWidth(0.5).stroke();
+        doc.moveTo(marginLeft, 52).lineTo(marginRight, 52).lineWidth(0.5).stroke();
+        doc.fontSize(10).font('Helvetica-Bold').text(title, marginLeft, 58, { align: 'center', width: contentWidth, lineBreak: false });
+        doc.moveTo(marginLeft, 74).lineTo(marginRight, 74).lineWidth(0.5).stroke();
     };
 
     const addFooter = () => {
-        const footerBaseY = 340;
-        doc.moveTo(28, footerBaseY).lineTo(584, footerBaseY).lineWidth(0.5).stroke();
-        doc.fontSize(7.5).font('Helvetica').fillColor('#000000');
-        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerBaseY + 8, {
+        const footerBaseY = 565; // Ajustado a la parte inferior de la hoja vertical (alto total 612)
+        doc.moveTo(marginLeft, footerBaseY).lineTo(marginRight, footerBaseY).lineWidth(0.5).stroke('#000000');
+        doc.fontSize(7).font('Helvetica').fillColor('#000000');
+        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", marginLeft, footerBaseY + 6, {
             align: 'center',
-            width: 556
+            width: contentWidth,
+            lineBreak: false
         });
-        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 28, footerBaseY + 18, {
+        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", marginLeft, footerBaseY + 15, {
             align: 'center',
-            width: 556
+            width: contentWidth,
+            lineBreak: false
         });
     };
 
@@ -804,65 +832,74 @@ exports.printReciboPdf = async (req, res) => {
         const drawReceipt = (title) => {
             addHeader(title);
 
-            let y = 100;
-            const leftX = 28;
-            const rightX = 340;
-            const labelW = 95;
-            const rowGap = 15;
-            const bodyWidth = contentWidth;
+            let y = 84;
+            const labelW = 90;
+            const valW = contentWidth - labelW; // 266 pt
+            const rowGap = 14;
 
-            const drawRow = (label, value, width = 260) => {
-                doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
-                doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: width - labelW });
-                y += rowGap;
-            };
+            // Datos principales (No. Recibo, Contrato, Fecha)
+            doc.fontSize(8.5).font('Helvetica-Bold').text('No. Recibo:', marginLeft, y, { width: labelW });
+            doc.font('Helvetica').text(String(recibo.NoRecibo || ''), marginLeft + labelW, y, { width: 100, lineBreak: false });
 
-            const drawWrappedRow = (label, value, width = 260) => {
-                doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
-                doc.font('Helvetica');
+            doc.font('Helvetica-Bold').text('Fecha:', marginLeft + 210, y, { width: 45 });
+            doc.font('Helvetica').text(formatDate(recibo.FeRecibo), marginLeft + 255, y, { width: 100, lineBreak: false });
+            y += rowGap;
 
-                const textHeight = getTextHeight(value, width - labelW, 8.5, 'Helvetica');
-                doc.text(value ?? '', leftX + labelW, y, { width: width - labelW });
+            doc.fontSize(8.5).font('Helvetica-Bold').text('No. Cédula:', marginLeft, y, { width: labelW });
+            doc.font('Helvetica').text(String(recibo.NuCedula || ''), marginLeft + labelW, y, { width: 100, lineBreak: false });
 
-                y += Math.max(rowGap, textHeight + 3);
-            };
+            doc.font('Helvetica-Bold').text('No. Contrato:', marginLeft + 210, y, { width: 65 });
+            doc.font('Helvetica').text(String(recibo.NoContrato || ''), marginLeft + 275, y, { width: 80, lineBreak: false });
+            y += rowGap;
 
-            drawRow('No. Recibo:', recibo.NoRecibo, 260);
-            drawRow('No. Cédula:', recibo.NuCedula, 260);
-            drawWrappedRow('Nombre del Cliente:', recibo.nombreCliente, 260);
-            drawWrappedRow('Motivo:', recibo.Motivo, 260);
-            drawRow('Monto Pagado:', formatMoney(recibo.MnPagado), 260);
+            // Nombre Cliente
+            const hNombre = getTextHeight(recibo.nombreCliente, valW);
+            doc.fontSize(8.5).font('Helvetica-Bold').text('Nombre Cliente:', marginLeft, y, { width: labelW });
+            doc.font('Helvetica').text(recibo.nombreCliente ?? '', marginLeft + labelW, y, { width: valW });
+            y += Math.max(rowGap, hNombre + 2);
 
+            // Motivo / Concepto
+            const hMotivo = getTextHeight(recibo.Motivo, valW);
+            doc.fontSize(8.5).font('Helvetica-Bold').text('Motivo:', marginLeft, y, { width: labelW });
+            doc.font('Helvetica').text(recibo.Motivo ?? '', marginLeft + labelW, y, { width: valW });
+            y += Math.max(rowGap, hMotivo + 2);
+
+            // Monto Pagado
+            doc.fontSize(8.5).font('Helvetica-Bold').text('Monto Pagado:', marginLeft, y, { width: labelW });
+            doc.font('Helvetica').text(formatMoney(recibo.MnPagado), marginLeft + labelW, y, { width: valW, lineBreak: false });
+            y += rowGap;
+
+            // Formas de Pago
             if (depositosRows.length === 0) {
-                doc.fontSize(8.5).font('Helvetica').text('Sin formas de pago registradas.', leftX, y);
-                y += 14;
+                doc.fontSize(8.5).font('Helvetica').text('Sin formas de pago registradas.', marginLeft, y, { width: contentWidth });
+                y += rowGap;
             } else {
                 depositosRows.forEach((pago) => {
                     const detalle = buildFormaPago(pago);
-                    const detalleHeight = getTextHeight(detalle, 556 - 170, 8.5, 'Helvetica');
+                    const detalleW = contentWidth - 85;
+                    const detalleHeight = getTextHeight(detalle, detalleW);
 
-                    if (y + detalleHeight > 320) {
+                    // Límite vertical antes de pie de página para prevenir auto-salto accidental
+                    if (y + detalleHeight > 540) {
                         doc.addPage();
                         addHeader(title);
-                        y = 100;
+                        y = 84;
                     }
 
-                    doc.fontSize(8.5).font('Helvetica-Bold').text('Forma de Pago:', leftX, y);
-                    doc.font('Helvetica').text(detalle, leftX + 82, y, { width: 556 - 82 });
+                    doc.fontSize(8.5).font('Helvetica-Bold').text('Forma de Pago:', marginLeft, y, { width: 85 });
+                    doc.font('Helvetica').text(detalle, marginLeft + 85, y, { width: detalleW });
                     y += Math.max(14, detalleHeight + 2);
                 });
             }
 
-            drawRow('Saldo:', formatMoney(recibo.MnSaldo), 260);
-
-            doc.fontSize(8.5).font('Helvetica-Bold').text('No. Contrato:', rightX, 100);
-            doc.font('Helvetica').text(String(recibo.NoContrato || ''), rightX + 78, 100, { width: 120 });
-
-            doc.fontSize(8.5).font('Helvetica-Bold').text('Fecha:', rightX, 116);
-            doc.font('Helvetica').text(formatDate(recibo.FeRecibo), rightX + 78, 116, { width: 120 });
+            // Saldo
+            doc.fontSize(8.5).font('Helvetica-Bold').text('Saldo:', marginLeft, y, { width: labelW });
+            doc.font('Helvetica').text(formatMoney(recibo.MnSaldo), marginLeft + labelW, y, { width: valW, lineBreak: false });
         };
 
         drawReceipt('RECIBO');
+        
+        // Segunda página para la copia del cliente
         doc.addPage();
         drawReceipt('RECIBO (COPIA CLIENTE)');
 
@@ -873,14 +910,16 @@ exports.printReciboPdf = async (req, res) => {
         }
     } catch (error) {
         console.error('Error generando recibo PDF:', error);
-        return res.status(500).json({
-            status: 'error',
-            message: 'Error al generar el PDF'
-        });
+        if (!res.headersSent) {
+            return res.status(500).json({
+                status: 'error',
+                message: 'Error al generar el PDF'
+            });
+        }
     }
 
     doc.end();
-}
+};
 
 exports.printReciboPdfOnePage = async (req, res) => {
     const { NoRecibo, usuarioReporte } = req.params;
@@ -892,11 +931,12 @@ exports.printReciboPdfOnePage = async (req, res) => {
         });
     }
 
-    // Tamaño Carta Estándar (612 x 792 pt)
+    // Tamaña Carta Estándar (612 x 792 pt)
+    // Se deshabilita autoPageBreak para evitar que el renderizado inferior genere una 2da página
     const doc = new PDFDocument({
         size: 'LETTER',
-        margins: { top: 25, bottom: 25, left: 28, right: 28 },
-        bufferPages: true
+        margins: { top: 20, bottom: 20, left: 28, right: 28 },
+        autoPageBreak: false
     });
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -918,21 +958,21 @@ exports.printReciboPdfOnePage = async (req, res) => {
         return date.toLocaleDateString('es-VE');
     };
 
-    const getTextHeight = (text, width, fontSize = 9, font = 'Helvetica') => {
+    const getTextHeight = (text, width, fontSize = 8.5, font = 'Helvetica') => {
         doc.fontSize(fontSize).font(font);
         return doc.heightOfString(String(text ?? ''), { width });
     };
 
     const addHeader = (title, startY) => {
         try {
-            doc.image(logoPath, 28, startY + 22, { width: 44 });
+            doc.image(logoPath, 28, startY + 18, { width: 44 });
         } catch (error) {
-            console.log('Error logo');
+            console.log('Error cargando logo');
         }
 
         doc.fontSize(8).font('Helvetica-Bold')
-            .text("Grado`s de Venezuela, C.A.", 85, startY + 24)
-            .font('Helvetica').text("J-30591547-4", 85, startY + 35);
+            .text("Grado`s de Venezuela, C.A.", 85, startY + 20)
+            .font('Helvetica').text("J-30591547-4", 85, startY + 31);
 
         const fechaActual = new Date().toLocaleDateString('es-VE');
         const horaActual = new Date().toLocaleTimeString('es-VE', {
@@ -942,26 +982,28 @@ exports.printReciboPdfOnePage = async (req, res) => {
         });
 
         doc.fontSize(7.5).font('Helvetica')
-            .text(`Fecha: ${fechaActual}`, 420, startY + 22, { align: 'right', width: 164 })
-            .text(`Hora: ${horaActual}`, 420, startY + 32, { align: 'right', width: 164 })
-            .text(`Usuario: ${usuarioReporte || ''}`, 420, startY + 42, { align: 'right', width: 164 });
+            .text(`Fecha: ${fechaActual}`, 420, startY + 18, { align: 'right', width: 164, lineBreak: false })
+            .text(`Hora: ${horaActual}`, 420, startY + 28, { align: 'right', width: 164, lineBreak: false })
+            .text(`Usuario: ${usuarioReporte || ''}`, 420, startY + 38, { align: 'right', width: 164, lineBreak: false });
 
-        doc.moveTo(28, startY + 60).lineTo(584, startY + 60).lineWidth(0.5).stroke();
-        doc.fontSize(10.5).font('Helvetica-Bold').text(title, 28, startY + 67, { align: 'center', width: 556 });
-        doc.moveTo(28, startY + 84).lineTo(584, startY + 84).lineWidth(0.5).stroke();
+        doc.moveTo(28, startY + 54).lineTo(584, startY + 54).lineWidth(0.5).stroke();
+        doc.fontSize(10).font('Helvetica-Bold').text(title, 28, startY + 60, { align: 'center', width: 556, lineBreak: false });
+        doc.moveTo(28, startY + 76).lineTo(584, startY + 76).lineWidth(0.5).stroke();
     };
 
     const addFooter = (startY) => {
-        const footerBaseY = startY + 345;
-        doc.moveTo(28, footerBaseY).lineTo(584, footerBaseY).lineWidth(0.5).stroke();
+        const footerBaseY = startY + 338;
+        doc.moveTo(28, footerBaseY).lineTo(584, footerBaseY).lineWidth(0.5).stroke('#000000');
         doc.fontSize(7.5).font('Helvetica').fillColor('#000000');
-        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerBaseY + 6, {
+        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerBaseY + 5, {
             align: 'center',
-            width: 556
+            width: 556,
+            lineBreak: false
         });
-        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 28, footerBaseY + 16, {
+        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 28, footerBaseY + 15, {
             align: 'center',
-            width: 556
+            width: 556,
+            lineBreak: false
         });
     };
 
@@ -1016,15 +1058,15 @@ exports.printReciboPdfOnePage = async (req, res) => {
         const drawReceipt = (title, startY) => {
             addHeader(title, startY);
 
-            let y = startY + 98;
+            let y = startY + 88;
             const leftX = 28;
             const rightX = 340;
             const labelW = 95;
-            const rowGap = 14;
+            const rowGap = 13;
 
             const drawRow = (label, value, width = 260) => {
                 doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
-                doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: width - labelW });
+                doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: width - labelW, lineBreak: false });
                 y += rowGap;
             };
 
@@ -1045,35 +1087,36 @@ exports.printReciboPdfOnePage = async (req, res) => {
             drawRow('Monto Pagado:', formatMoney(recibo.MnPagado), 260);
 
             if (depositosRows.length === 0) {
-                doc.fontSize(8.5).font('Helvetica').text('Sin formas de pago registradas.', leftX, y);
-                y += 14;
+                doc.fontSize(8.5).font('Helvetica').text('Sin formas de pago registradas.', leftX, y, { width: 260, lineBreak: false });
+                y += rowGap;
             } else {
                 depositosRows.forEach((pago) => {
                     const detalle = buildFormaPago(pago);
-                    const detalleHeight = getTextHeight(detalle, 556 - 82, 8.5, 'Helvetica');
+                    const detalleW = 556 - 82;
+                    const detalleHeight = getTextHeight(detalle, detalleW, 8.5, 'Helvetica');
 
-                    doc.fontSize(8.5).font('Helvetica-Bold').text('Forma de Pago:', leftX, y);
-                    doc.font('Helvetica').text(detalle, leftX + 82, y, { width: 556 - 82 });
-                    y += Math.max(14, detalleHeight + 1);
+                    doc.fontSize(8.5).font('Helvetica-Bold').text('Forma de Pago:', leftX, y, { width: 82 });
+                    doc.font('Helvetica').text(detalle, leftX + 82, y, { width: detalleW });
+                    y += Math.max(13, detalleHeight + 1);
                 });
             }
 
             drawRow('Saldo:', formatMoney(recibo.MnSaldo), 260);
 
             // Bloque lateral derecho (Contrato y Fecha)
-            doc.fontSize(8.5).font('Helvetica-Bold').text('No. Contrato:', rightX, startY + 98);
-            doc.font('Helvetica').text(String(recibo.NoContrato || ''), rightX + 78, startY + 98, { width: 120 });
+            doc.fontSize(8.5).font('Helvetica-Bold').text('No. Contrato:', rightX, startY + 88);
+            doc.font('Helvetica').text(String(recibo.NoContrato || ''), rightX + 78, startY + 88, { width: 120, lineBreak: false });
 
-            doc.fontSize(8.5).font('Helvetica-Bold').text('Fecha:', rightX, startY + 113);
-            doc.font('Helvetica').text(formatDate(recibo.FeRecibo), rightX + 78, startY + 113, { width: 120 });
+            doc.fontSize(8.5).font('Helvetica-Bold').text('Fecha:', rightX, startY + 101);
+            doc.font('Helvetica').text(formatDate(recibo.FeRecibo), rightX + 78, startY + 101, { width: 120, lineBreak: false });
 
             addFooter(startY);
         };
 
-        // 1. Dibujar Recibo Original (Mitad Superior, Y = 0)
+        // 1. Dibujar Recibo Original (Mitad Superior)
         drawReceipt('RECIBO', 0);
 
-        // 2. Línea Punteada de División / Corte (Centro exacto de Hoja Carta: 792 / 2 = 396pt)
+        // 2. Línea Punteada de División / Corte en el centro exacto (792 / 2 = 396pt)
         const middleY = 396;
         doc.save()
            .dash(4, { space: 3 })
@@ -1084,15 +1127,17 @@ exports.printReciboPdfOnePage = async (req, res) => {
            .undash()
            .restore();
 
-        // 3. Dibujar Copia Cliente (Mitad Inferior, Y = 396)
-        drawReceipt('RECIBO (COPIA CLIENTE)', 396);
+        // 3. Dibujar Copia Cliente (Mitad Inferior)
+        drawReceipt('RECIBO (COPIA CLIENTE)', 390);
 
     } catch (error) {
         console.error('Error generando recibo PDF:', error);
-        return res.status(500).json({
-            status: 'error',
-            message: 'Error al generar el PDF'
-        });
+        if (!res.headersSent) {
+            return res.status(500).json({
+                status: 'error',
+                message: 'Error al generar el PDF'
+            });
+        }
     }
 
     doc.end();
@@ -1151,10 +1196,10 @@ exports.sendReciboEmail = async (req, res) => {
             ORDER BY Fecha ASC
         `, [recibo.NoRecibo, recibo.NoContrato, recibo.NuCedula]);
 
-        // 3. Promesa para generar el PDF en un Buffer de memoria
+        // 3. Promesa para generar el PDF en un Buffer de memoria (HOJA VERTICAL)
         const pdfBuffer = await new Promise((resolve, reject) => {
             const doc = new PDFDocument({
-                size: [612, 396],
+                size: [396, 612], // Formato vertical (Portrait)
                 margins: { top: 25, bottom: 20, left: 28, right: 28 },
                 bufferPages: true
             });
@@ -1164,8 +1209,8 @@ exports.sendReciboEmail = async (req, res) => {
             doc.on('end', () => resolve(Buffer.concat(buffers)));
             doc.on('error', reject);
 
-            const pageWidth = 612;
-            const contentWidth = pageWidth - 56;
+            const pageWidth = 396;
+            const contentWidth = pageWidth - 56; // 340px de ancho utilizable
             const logoPath = path.join(__dirname, 'logo.png');
 
             const formatMoney = (value) => {
@@ -1188,14 +1233,14 @@ exports.sendReciboEmail = async (req, res) => {
 
             const addHeader = (title) => {
                 try {
-                    doc.image(logoPath, 28, 22, { width: 48 });
+                    doc.image(logoPath, 28, 22, { width: 44 });
                 } catch (error) {
                     console.log('Error logo');
                 }
 
                 doc.fontSize(8).font('Helvetica-Bold')
-                    .text("Grado`s de Venezuela, C.A.", 90, 24)
-                    .font('Helvetica').text("J-30591547-4", 90, 35);
+                    .text("Grado`s de Venezuela, C.A.", 80, 24)
+                    .font('Helvetica').text("J-30591547-4", 80, 35);
 
                 const fechaActual = new Date().toLocaleDateString('es-VE');
                 const horaActual = new Date().toLocaleTimeString('es-VE', {
@@ -1205,26 +1250,26 @@ exports.sendReciboEmail = async (req, res) => {
                 });
 
                 doc.fontSize(7.5).font('Helvetica')
-                    .text(`Fecha: ${fechaActual}`, 420, 22, { align: 'right', width: 164 })
-                    .text(`Hora: ${horaActual}`, 420, 32, { align: 'right', width: 164 })
-                    .text(`Usuario: ${usuarioReporte || ''}`, 420, 42, { align: 'right', width: 164 });
+                    .text(`Fecha: ${fechaActual}`, 230, 22, { align: 'right', width: 138 })
+                    .text(`Hora: ${horaActual}`, 230, 32, { align: 'right', width: 138 })
+                    .text(`Usuario: ${usuarioReporte || ''}`, 230, 42, { align: 'right', width: 138 });
 
-                doc.moveTo(28, 60).lineTo(584, 60).lineWidth(0.5).stroke();
-                doc.fontSize(11).font('Helvetica-Bold').text(title, 28, 68, { align: 'center', width: 556 });
-                doc.moveTo(28, 86).lineTo(584, 86).lineWidth(0.5).stroke();
+                doc.moveTo(28, 58).lineTo(368, 58).lineWidth(0.5).stroke();
+                doc.fontSize(11).font('Helvetica-Bold').text(title, 28, 65, { align: 'center', width: 340 });
+                doc.moveTo(28, 82).lineTo(368, 82).lineWidth(0.5).stroke();
             };
 
             const addFooter = () => {
-                const footerBaseY = 340;
-                doc.moveTo(28, footerBaseY).lineTo(584, footerBaseY).lineWidth(0.5).stroke();
+                const footerBaseY = 560; // Ajustado para el alto vertical (612)
+                doc.moveTo(28, footerBaseY).lineTo(368, footerBaseY).lineWidth(0.5).stroke();
                 doc.fontSize(7.5).font('Helvetica').fillColor('#000000');
                 doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerBaseY + 8, {
                     align: 'center',
-                    width: 556
+                    width: 340
                 });
                 doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 28, footerBaseY + 18, {
                     align: 'center',
-                    width: 556
+                    width: 340
                 });
             };
 
@@ -1260,33 +1305,35 @@ exports.sendReciboEmail = async (req, res) => {
             const drawReceipt = (title) => {
                 addHeader(title);
 
-                let y = 100;
+                let y = 92;
                 const leftX = 28;
-                const rightX = 340;
-                const labelW = 95;
+                const labelW = 100;
+                const valueW = contentWidth - labelW;
                 const rowGap = 15;
 
-                const drawRow = (label, value, width = 260) => {
+                const drawRow = (label, value) => {
                     doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
-                    doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: width - labelW });
+                    doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: valueW });
                     y += rowGap;
                 };
 
-                const drawWrappedRow = (label, value, width = 260) => {
+                const drawWrappedRow = (label, value) => {
                     doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
                     doc.font('Helvetica');
 
-                    const textHeight = getTextHeight(value, width - labelW, 8.5, 'Helvetica');
-                    doc.text(value ?? '', leftX + labelW, y, { width: width - labelW });
+                    const textHeight = getTextHeight(value, valueW, 8.5, 'Helvetica');
+                    doc.text(value ?? '', leftX + labelW, y, { width: valueW });
 
                     y += Math.max(rowGap, textHeight + 3);
                 };
 
-                drawRow('No. Recibo:', recibo.NoRecibo, 260);
-                drawRow('No. Cédula:', recibo.NuCedula, 260);
-                drawWrappedRow('Nombre del Cliente:', recibo.nombreCliente, 260);
-                drawWrappedRow('Motivo:', recibo.Motivo, 260);
-                drawRow('Monto Pagado:', formatMoney(recibo.MnPagado), 260);
+                drawRow('No. Recibo:', recibo.NoRecibo);
+                drawRow('No. Contrato:', String(recibo.NoContrato || ''));
+                drawRow('Fecha Recibo:', formatDate(recibo.FeRecibo));
+                drawRow('No. Cédula:', recibo.NuCedula);
+                drawWrappedRow('Nombre Cliente:', recibo.nombreCliente);
+                drawWrappedRow('Motivo:', recibo.Motivo);
+                drawRow('Monto Pagado:', formatMoney(recibo.MnPagado));
 
                 if (depositosRows.length === 0) {
                     doc.fontSize(8.5).font('Helvetica').text('Sin formas de pago registradas.', leftX, y);
@@ -1294,27 +1341,21 @@ exports.sendReciboEmail = async (req, res) => {
                 } else {
                     depositosRows.forEach((pago) => {
                         const detalle = buildFormaPago(pago);
-                        const detalleHeight = getTextHeight(detalle, 556 - 170, 8.5, 'Helvetica');
+                        const detalleHeight = getTextHeight(detalle, contentWidth - 85, 8.5, 'Helvetica');
 
-                        if (y + detalleHeight > 320) {
+                        if (y + detalleHeight > 540) {
                             doc.addPage();
                             addHeader(title);
-                            y = 100;
+                            y = 92;
                         }
 
                         doc.fontSize(8.5).font('Helvetica-Bold').text('Forma de Pago:', leftX, y);
-                        doc.font('Helvetica').text(detalle, leftX + 82, y, { width: 556 - 82 });
+                        doc.font('Helvetica').text(detalle, leftX + 85, y, { width: contentWidth - 85 });
                         y += Math.max(14, detalleHeight + 2);
                     });
                 }
 
-                drawRow('Saldo:', formatMoney(recibo.MnSaldo), 260);
-
-                doc.fontSize(8.5).font('Helvetica-Bold').text('No. Contrato:', rightX, 100);
-                doc.font('Helvetica').text(String(recibo.NoContrato || ''), rightX + 78, 100, { width: 120 });
-
-                doc.fontSize(8.5).font('Helvetica-Bold').text('Fecha:', rightX, 116);
-                doc.font('Helvetica').text(formatDate(recibo.FeRecibo), rightX + 78, 116, { width: 120 });
+                drawRow('Saldo:', formatMoney(recibo.MnSaldo));
             };
 
             // DIBUJAR SOLAMENTE LA COPIA DEL CLIENTE
@@ -1330,7 +1371,6 @@ exports.sendReciboEmail = async (req, res) => {
         });
 
         // 4. Configurar el servicio de envío de correos (Nodemailer)
-        // Reemplaza los datos de auth con tus credenciales de correo (Gmail, SMTP, etc.)
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
@@ -1422,10 +1462,10 @@ exports.sendReciboEmailOnePage = async (req, res) => {
             ORDER BY Fecha ASC
         `, [recibo.NoRecibo, recibo.NoContrato, recibo.NuCedula]);
 
-        // Promesa para generar el PDF completo en 1 página Carta
+        // Promesa para generar el PDF completo en 1 página Carta Vertical
         const pdfBuffer = await new Promise((resolve, reject) => {
             const doc = new PDFDocument({
-                size: 'LETTER', // 612 x 792
+                size: 'LETTER', // 612 x 792 (Vertical por defecto)
                 margins: { top: 20, bottom: 20, left: 28, right: 28 },
                 bufferPages: true
             });
@@ -1486,7 +1526,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
 
             // Dibujar pie de página relativo a 'startY'
             const addFooter = (startY) => {
-                const footerY = startY + 320;
+                const footerY = startY + 310;
                 doc.moveTo(28, footerY).lineTo(584, footerY).lineWidth(0.5).stroke();
                 doc.fontSize(7).font('Helvetica').fillColor('#000000');
                 doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerY + 5, {
@@ -1573,8 +1613,8 @@ exports.sendReciboEmailOnePage = async (req, res) => {
             // Dibujar recibo superior (Copia Cliente)
             drawSingleReceipt('RECIBO - COPIA CLIENTE', 15);
 
-            // Línea de corte punteada intermedia
-            const lineY = 396;
+            // Línea de corte punteada intermedia ajustada a la mitad de la página vertical (792px / 2 = 396px)
+            const lineY = 385;
             doc.save()
                .moveTo(28, lineY)
                .lineTo(584, lineY)
@@ -1591,7 +1631,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
                });
 
             // Dibujar recibo inferior (Copia Empresa)
-            drawSingleReceipt('RECIBO - COPIA EMPRESA', 415);
+            drawSingleReceipt('RECIBO - COPIA EMPRESA', 405);
 
             doc.end();
         });

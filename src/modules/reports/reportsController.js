@@ -1453,7 +1453,6 @@ exports.generateClosingPdf = async (req, res) => {
             [NoCierre, fechaCierreBD, fechaFiltroBD]
         );
 
-        // Si no se actualizó ningún registro, hacemos rollback y notificamos
         if (resRecibos.affectedRows === 0 && resDepositos.affectedRows === 0) {
             await connection.rollback();
             return res.status(404).json({
@@ -1462,10 +1461,7 @@ exports.generateClosingPdf = async (req, res) => {
             });
         }
 
-        // --- ACTUALIZAR CORRELATIVO EN CONFIGURACION (+1) ---
         await connection.query("UPDATE Configuracion SET NoCierre = NoCierre + 1");
-
-        // Confirmar la transacción en la base de datos
         await connection.commit();
 
         // 3. CONSULTAS PARA EL REPORTE
@@ -1501,7 +1497,7 @@ exports.generateClosingPdf = async (req, res) => {
             [NoCierre]
         );
 
-        // 4. AGRUPACIÓN Y ESTRUCTURACIÓN DE DATOS
+        // 4. AGRUPACIÓN DE DATOS
         const resumenPorActo = {};
         let totalGeneralCierre = 0;
         let totalOperacionesCierre = 0;
@@ -1533,11 +1529,13 @@ exports.generateClosingPdf = async (req, res) => {
             totalOperacionesCierre += cant;
         });
 
-        // 5. CONSTRUCCIÓN DEL PDF CON PDFKIT
+        // 5. CONSTRUCCIÓN DEL PDF
+        // Ajustamos autoFirstPage y autoPageBreak para evitar que PDFKit cree páginas no deseadas
         const doc = new PDFDocument({
             size: 'A4',
-            margins: { top: 40, bottom: 60, left: 50, right: 50 },
-            bufferPages: true 
+            margins: { top: 40, bottom: 40, left: 50, right: 50 },
+            bufferPages: true,
+            autoFirstPage: true
         });
 
         res.setHeader('Content-Type', 'application/pdf');
@@ -1545,12 +1543,14 @@ exports.generateClosingPdf = async (req, res) => {
         doc.pipe(res);
 
         const logoPath = path.join(__dirname, 'logo.png');
+        const tableWidth = 495;
+        const MAX_Y = 710; // Umbral de seguridad para salto manual de página
 
         const addHeader = (doc) => {
             try {
                 doc.image(logoPath, 50, 35, { width: 65 });
             } catch (error) {
-                // Silencioso si la imagen no se encuentra
+                // Silencioso si la imagen no existe
             }
 
             doc.fontSize(9).font('Helvetica-Bold')
@@ -1568,7 +1568,7 @@ exports.generateClosingPdf = async (req, res) => {
             doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
             
             const fullTitle = `REPORTE DE CIERRE DIARIO N° ${NoCierre}`;
-            doc.fontSize(11).font('Helvetica-Bold').text(fullTitle, 50, 95, { align: 'center', width: 495 });
+            doc.fontSize(11).font('Helvetica-Bold').text(fullTitle, 50, 95, { align: 'center', width: tableWidth });
             
             doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
         };
@@ -1576,22 +1576,20 @@ exports.generateClosingPdf = async (req, res) => {
         addHeader(doc);
 
         let currentY = 125;
-        const tableWidth = 495;
 
         // Subtítulo
         doc.fontSize(8).font('Helvetica-Bold').fillColor('#333333');
         doc.text(`FECHA RECIBOS: ${fechaReciboFormateada}    |    FECHA PROCESADO: ${fechaHoy.toLocaleDateString('es-VE')}`, 50, currentY);
         currentY += 20;
 
-        // --- DIBUJAR RESUMEN POR CADA ACTO (MÁXIMO 5 ACTOS POR HOJA) ---
+        // --- RESUMEN POR ACTO ---
         let actosEnPaginaActual = 0;
         const maxActosPorPagina = 5;
 
         Object.values(resumenPorActo).forEach(acto => {
-            // Calcular altura aproximada del bloque de este acto
             const alturaAproxActo = 12 + 16 + (acto.metodos.length * 16) + 18 + 15;
 
-            if (currentY + alturaAproxActo > 720 || actosEnPaginaActual >= maxActosPorPagina) {
+            if (currentY + alturaAproxActo > MAX_Y || actosEnPaginaActual >= maxActosPorPagina) {
                 doc.addPage();
                 addHeader(doc);
                 currentY = 130;
@@ -1604,9 +1602,9 @@ exports.generateClosingPdf = async (req, res) => {
 
             doc.rect(50, currentY, tableWidth, 16).fillAndStroke('#EAEAEA', '#000000');
             doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
-            doc.text("MÉTODO DE PAGO", 60, currentY + 4, { width: 230 });
-            doc.text("CANT. OP.", 290, currentY + 4, { width: 80, align: 'center' });
-            doc.text("SUBTOTAL", 380, currentY + 4, { width: 155, align: 'right' });
+            doc.text("MÉTODO DE PAGO", 60, currentY + 4, { width: 230, lineBreak: false });
+            doc.text("CANT. OP.", 290, currentY + 4, { width: 80, align: 'center', lineBreak: false });
+            doc.text("SUBTOTAL", 380, currentY + 4, { width: 155, align: 'right', lineBreak: false });
             currentY += 16;
 
             acto.metodos.forEach((m, idx) => {
@@ -1618,9 +1616,9 @@ exports.generateClosingPdf = async (req, res) => {
                 doc.fillColor('#000000').font('Helvetica').fontSize(8);
                 doc.rect(50, currentY, tableWidth, rowH).stroke();
 
-                doc.text(m.metodo.toUpperCase(), 60, currentY + 4, { width: 230 });
-                doc.text(m.cantidad.toString(), 290, currentY + 4, { width: 80, align: 'center' });
-                doc.text(m.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 4, { width: 155, align: 'right' });
+                doc.text(m.metodo.toUpperCase(), 60, currentY + 4, { width: 230, lineBreak: false });
+                doc.text(m.cantidad.toString(), 290, currentY + 4, { width: 80, align: 'center', lineBreak: false });
+                doc.text(m.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 4, { width: 155, align: 'right', lineBreak: false });
 
                 currentY += rowH;
             });
@@ -1629,16 +1627,16 @@ exports.generateClosingPdf = async (req, res) => {
             doc.font('Helvetica-Bold').fontSize(8);
             doc.rect(50, currentY, tableWidth, 18).fillAndStroke('#F0F4F8', '#000000');
             doc.fillColor('#102A43');
-            doc.text(`SUBTOTAL ACTO ${acto.codigoActo}`, 60, currentY + 5, { width: 230 });
-            doc.text(acto.operacionesActo.toString(), 290, currentY + 5, { width: 80, align: 'center' });
-            doc.text(acto.totalActo.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 5, { width: 155, align: 'right' });
+            doc.text(`SUBTOTAL ACTO ${acto.codigoActo}`, 60, currentY + 5, { width: 230, lineBreak: false });
+            doc.text(acto.operacionesActo.toString(), 290, currentY + 5, { width: 80, align: 'center', lineBreak: false });
+            doc.text(acto.totalActo.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 5, { width: 155, align: 'right', lineBreak: false });
 
             currentY += 25;
             actosEnPaginaActual++;
         });
 
         // --- TOTAL GENERAL ---
-        if (currentY + 30 > 720) {
+        if (currentY + 30 > MAX_Y) {
             doc.addPage();
             addHeader(doc);
             currentY = 130;
@@ -1647,14 +1645,14 @@ exports.generateClosingPdf = async (req, res) => {
         doc.font('Helvetica-Bold').fontSize(9);
         doc.rect(50, currentY, tableWidth, 22).fillAndStroke('#D1E7DD', '#000000');
         doc.fillColor('#0F5132');
-        doc.text("TOTAL GENERAL DEL CIERRE (TODOS LOS ACTOS)", 60, currentY + 7, { width: 230 });
-        doc.text(totalOperacionesCierre.toString(), 290, currentY + 7, { width: 80, align: 'center' });
-        doc.text(totalGeneralCierre.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 7, { width: 155, align: 'right' });
+        doc.text("TOTAL GENERAL DEL CIERRE (TODOS LOS ACTOS)", 60, currentY + 7, { width: 230, lineBreak: false });
+        doc.text(totalOperacionesCierre.toString(), 290, currentY + 7, { width: 80, align: 'center', lineBreak: false });
+        doc.text(totalGeneralCierre.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 7, { width: 155, align: 'right', lineBreak: false });
 
         currentY += 35;
 
-        // --- DETALLE DE TRANSACCIONES CON FILAS DINÁMICAS ---
-        if (currentY + 50 > 720) {
+        // --- DETALLE DE TRANSACCIONES ---
+        if (currentY + 50 > MAX_Y) {
             doc.addPage();
             addHeader(doc);
             currentY = 130;
@@ -1667,12 +1665,12 @@ exports.generateClosingPdf = async (req, res) => {
         const drawDetailHeader = (y) => {
             doc.rect(50, y, tableWidth, 16).fillAndStroke('#E0E0E0', '#000000');
             doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
-            doc.text("ACTO", 55, y + 4, { width: 45 });
-            doc.text("RECIBO", 105, y + 4, { width: 50 });
-            doc.text("CÉDULA", 160, y + 4, { width: 65 });
-            doc.text("MÉTODO", 230, y + 4, { width: 80 });
-            doc.text("BANCO / REF", 315, y + 4, { width: 120 });
-            doc.text("MONTO", 440, y + 4, { width: 95, align: 'right' });
+            doc.text("ACTO", 55, y + 4, { width: 45, lineBreak: false });
+            doc.text("RECIBO", 105, y + 4, { width: 50, lineBreak: false });
+            doc.text("CÉDULA", 160, y + 4, { width: 65, lineBreak: false });
+            doc.text("MÉTODO", 230, y + 4, { width: 80, lineBreak: false });
+            doc.text("BANCO / REF", 315, y + 4, { width: 120, lineBreak: false });
+            doc.text("MONTO", 440, y + 4, { width: 95, align: 'right', lineBreak: false });
             return y + 16;
         };
 
@@ -1683,16 +1681,13 @@ exports.generateClosingPdf = async (req, res) => {
             const bancoRef = [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ').toUpperCase();
             const metodoStr = (dep.metodoPago || '').toUpperCase();
 
-            // Calcular altura de celda dinámicamente según la longitud del texto
             doc.font('Helvetica').fontSize(8);
             const hBanco = doc.heightOfString(bancoRef, { width: 120 });
             const hMetodo = doc.heightOfString(metodoStr, { width: 80 });
             
-            // La altura mínima de fila será 16px, o crecerá si el texto toma más líneas
             const dynamicRowHeight = Math.max(16, hBanco + 6, hMetodo + 6);
 
-            // Verificar espacio antes de dibujar la fila
-            if (currentY + dynamicRowHeight > 720) {
+            if (currentY + dynamicRowHeight > MAX_Y) {
                 doc.addPage();
                 addHeader(doc);
                 currentY = 130;
@@ -1707,27 +1702,31 @@ exports.generateClosingPdf = async (req, res) => {
             doc.fillColor('#000000');
             doc.rect(50, currentY, tableWidth, dynamicRowHeight).stroke();
 
-            doc.text(dep.CodigoActo?.toString() || '', 55, currentY + 4, { width: 45 });
-            doc.text(dep.NoRecibo?.toString() || '', 105, currentY + 4, { width: 50 });
-            doc.text(dep.NuCedula?.toString() || '', 160, currentY + 4, { width: 65 });
+            doc.text(dep.CodigoActo?.toString() || '', 55, currentY + 4, { width: 45, lineBreak: false });
+            doc.text(dep.NoRecibo?.toString() || '', 105, currentY + 4, { width: 50, lineBreak: false });
+            doc.text(dep.NuCedula?.toString() || '', 160, currentY + 4, { width: 65, lineBreak: false });
             doc.text(metodoStr, 230, currentY + 4, { width: 80 });
             doc.text(bancoRef, 315, currentY + 4, { width: 120 });
-            doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 440, currentY + 4, { width: 95, align: 'right' });
+            doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 440, currentY + 4, { width: 95, align: 'right', lineBreak: false });
 
             currentY += dynamicRowHeight;
         });
 
-        // 6. NUMERACIÓN DE PÁGINAS Y FOOTER EN SEGUNDA PASADA
+        // 6. PIE DE PÁGINA Y NÚMERO DE PÁGINA (Buffer Pasada 2)
         const range = doc.bufferedPageRange();
         for (let i = range.start; i < (range.start + range.count); i++) {
             doc.switchToPage(i);
-            const footerBaseY = 750;
-            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
-            doc.fontSize(8).font('Helvetica').fillColor('#000000');
-            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 8, { align: 'center', width: 495 });
-            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 18, { align: 'center', width: 495 });
+            
+            // Usamos coordenadas absolutas seguras dentro de la hoja A4 (altura: ~842pt)
+            const footerBaseY = 760;
+            
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke('#000000');
+            doc.fontSize(7).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 5, { align: 'center', width: tableWidth, lineBreak: false });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 14, { align: 'center', width: tableWidth, lineBreak: false });
+            
             doc.fontSize(8).font('Helvetica-Bold')
-                .text(`Página ${i + 1} / ${range.count}`, 50, 780, { align: 'right', width: 495 });
+                .text(`Página ${i + 1} de ${range.count}`, 50, footerBaseY + 23, { align: 'right', width: tableWidth, lineBreak: false });
         }
 
         doc.end();
