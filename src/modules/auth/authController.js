@@ -1,11 +1,11 @@
 const db = require('../../config/db');
 
 exports.login = async (req, res) => {
-    const { Usuario, Clave } = req.body;
+    const { usuario, clave } = req.body;
 
     try{
         const sql = 'SELECT * FROM usuarios WHERE Usuario =? AND Clave = ?';
-        const [rows] = await db.query(sql, [Usuario, Clave]);
+        const [rows] = await db.query(sql, [usuario, clave]);
     
         if(rows.length === 0){
             return res.status(401).json({ error: 'Credenciales invalidas' });
