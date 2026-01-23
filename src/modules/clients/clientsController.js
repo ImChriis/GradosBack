@@ -44,6 +44,7 @@ exports.updateClient = async (req, res) => {
     const {nucedula, txnombre, txdireccion, txcelular, txemail} = req.body || {};
 
     if (!id || [nucedula, txnombre, txdireccion, txcelular, txemail].some(v => v == null || v === '')) {
+        // console.log('Missing required fields:', { id, nucedula, txnombre, txdireccion, txcelular, txemail });
         return res.status(400).json({ error: 'Missing required fields' });
     }
 

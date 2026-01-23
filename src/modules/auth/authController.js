@@ -12,7 +12,7 @@ exports.login = async (req, res) => {
         }
 
         res.json({ message: 'Login exitoso', user: {
-            id: rows[0].id,
+            id: rows[0].CodUsuario,
             usuario: rows[0].Usuario,
             maTipoUsr: rows[0].MaTipoUsr
         } });
