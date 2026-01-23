@@ -10,7 +10,11 @@ const pool = mysql.createPool({
     port: process.env.DB_PORT || 3306,
     waitForConnections: true,
     connectionLimit: 10,
-    queueLimit: 0
+    queueLimit: 0,
+    ssl: {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true // TiDB es seguro por defecto
+    }
 });
 
 //Conexion a la base de datos
