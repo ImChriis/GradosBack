@@ -3,6 +3,7 @@ const cors = require('cors');
 const db = require('./src/config/db');
 const authRoutes = require('./src/modules/auth/authRoutes');
 const clientsRoutes = require('./src/modules/clients/clientsRoutes');
+const specialitiesRoutes = require('./src/modules/specialities/specialitiesRoutes');
 
 const app = express();
 
@@ -20,13 +21,15 @@ function normalizeClientBody(req, res, next) {
 
 
 app.use('/auth', authRoutes);
-app.use('/clients', normalizeClientBody, clientsRoutes)
+app.use('/clients', normalizeClientBody, clientsRoutes);
+app.use('/specialities', specialitiesRoutes);
 
-
+//Desarrollo
 // app.listen(3000, () => {
 //     console.log('Servidor escuchando en el puerto 3000, localhost:3000');
 // });
 
+//Produccion
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);

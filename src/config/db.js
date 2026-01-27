@@ -11,6 +11,7 @@ const pool = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
+    //SSL solo para produccion
     ssl: {
         minVersion: 'TLSv1.2',
         rejectUnauthorized: true // TiDB es seguro por defecto
