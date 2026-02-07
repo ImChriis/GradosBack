@@ -6,4 +6,4 @@ router.get('/', clientsController.getClients);
 router.post('/add', clientsController.addClient);
 router.put('/update/:id', clientsController.updateClient);
 
-module.exports = router;
+module.exports = router;        

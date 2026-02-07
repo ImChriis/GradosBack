@@ -12,16 +12,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
-function normalizeClientBody(req, res, next) {
-  if (req.method === 'POST' && !Array.isArray(req.body)) {
-    const b = req.body || {};
-    req.body = [b.nucedula, b.txnombre, b.txdireccion, b.txcelular, b.txemail];
-  }
-  next();
-}
+// function normalizeClientBody(req, res, next) {
+//   if (req.method === 'POST' && !Array.isArray(req.body)) {
+//     const b = req.body || {};
+//     req.body = [b.nucedula, b.txnombre, b.txdireccion, b.txcelular, b.txemail];
+//   }
+//   next();
+// }
 
 app.use('/auth', authRoutes);
-app.use('/clients', normalizeClientBody, clientsRoutes);
+app.use('/clients', clientsRoutes);
 app.use('/specialities', specialitiesRoutes);
 app.use('/institutions', institutionsRoutes);
 
