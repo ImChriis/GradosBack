@@ -7,7 +7,7 @@ exports.getSpecialities = async (req, res) => {
         res.json(rows);
     } catch (error){
         console.error('Error fetching specialities:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 
@@ -30,7 +30,7 @@ exports.addSpeciality = async (req, res) => {
         });
     }catch (error){
         console.error('Error adding speciality: ', error);
-        res.status(500).json({ error: 'Server Error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 
@@ -65,7 +65,7 @@ exports.updateSpeciality = async (req, res) => {
             return res.status(409).json({ error: 'The new ID card number is already in use' });
         }
 
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 

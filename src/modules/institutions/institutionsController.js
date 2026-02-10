@@ -7,7 +7,7 @@ exports.getInstitutions = async (req, res) => {
         res.json(rows);
     } catch (error){
         console.error('Error fetching institutions:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 
@@ -30,7 +30,7 @@ exports.addInstitution = async (req, res) => {
         })
     } catch (error){
         console.error('Error adding institution: ', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 
@@ -64,7 +64,7 @@ exports.updateInstitution = async (req, res) => {
             return res.status(409).json({ error: 'The new ID card number is already in use' })
         }
 
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 

@@ -7,7 +7,7 @@ exports.getClients = async (req, res) => {
         res.json(rows);
     } catch (error) {
         console.error('Error fetching clients:', error);
-        res.status(500).json({ error: 'Server error'})
+        res.status(500).json({ error: 'Internal Server Error'})
     }
 }
 
@@ -30,7 +30,7 @@ exports.addClient = async (req, res) => {
          });
     } catch (error){
         console.error('Error adding client:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }
 
@@ -65,6 +65,6 @@ exports.updateClient = async (req, res) => {
             return res.status(409).json({ error: 'The new ID card number is already in use' })
         }
 
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 }

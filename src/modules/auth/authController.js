@@ -3,6 +3,12 @@ const db = require('../../config/db');
 exports.login = async (req, res) => {
     const { usuario, clave } = req.body;
 
+    if(!usuario || !clave){
+        return res.status(400).json({
+            message: 'Missing required fields: Usuario and Clave are mandatory'
+        })
+    }
+
     try{
         const sql = 'SELECT * FROM usuarios WHERE Usuario =? AND Clave = ?';
         const [rows] = await db.query(sql, [usuario, clave]);
