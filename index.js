@@ -6,6 +6,7 @@ const clientsRoutes = require('./src/modules/clients/clientsRoutes');
 const specialitiesRoutes = require('./src/modules/specialities/specialitiesRoutes');
 const institutionsRoutes = require('./src/modules/institutions/institutionRoutes');
 const actPlacesRoutes = require('./src/modules/ActPlaces/actPlacesRoutes');
+const banksRoutes = require('./src/modules/banks/banksRoutes');
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use('/clients', clientsRoutes);
 app.use('/specialities', specialitiesRoutes);
 app.use('/institutions', institutionsRoutes);
 app.use('/actPlaces', actPlacesRoutes);
+app.use('/banks', banksRoutes);
 
 //Desarrollo
 app.listen(3000, () => {

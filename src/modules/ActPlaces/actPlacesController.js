@@ -35,5 +35,30 @@ exports.addActPlace = async (req, res) => {
 }
 
 exports.updateActPlace = async (req, res) => {
+    const { CoLugar} = req.params;
+    const { TxLugar, Capacidad, MaTipoLugar, Activo, CodUser } = req.body || {};
+
+    if(!CoLugar || !TxLugar){
+        return res.status(400).json({ error: 'Missing required fields: CoLugar and TxLugar are mandatory' });
+    }
+
+    try{
+        const sql = 'UPDATE lugaracto SET TxLugar = ?, Capacidad = ?, MaTipoLugar = ?, Activo = ?, CodUser = ? WHERE CoLugar = ?';
+        const [rows] = await db.query(sql, [TxLugar, Capacidad, MaTipoLugar, Activo, CodUser, CoLugar]);
+
+        if(rows.affectedRows === 0){
+            return res.status(404).json({ error: 'Act Place not found or no changes made' });
+        }
+
+        res.json({ message: 'Act Place updated successfully' });
+    }catch (error){
+        console.error('Error updating act place: ', error);
+
+        if(error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ error: 'The new ID card number is already in use' })
+        }
+
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
     
 }
