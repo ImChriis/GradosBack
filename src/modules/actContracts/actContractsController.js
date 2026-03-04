@@ -42,7 +42,7 @@ exports.getActTotal = async (req, res) => {
 
 exports.recalculateActTotal = async (req, res) => {
     const { nuevoMonto, codigoActo } = req.body;
-    const connection = await pool.getConnection(); // Obtener conexión del pool
+    const connection = await db.getConnection(); // Obtener conexión del pool
 
     try {
         await connection.beginTransaction(); // Iniciamos transacción
