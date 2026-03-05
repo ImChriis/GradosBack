@@ -135,3 +135,71 @@ exports.getActUsersAmount = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 }
+
+exports.addUserToAct = async (req, res) => {
+    const { 
+        CodigoActo, NoContrato, NuCedula, Nombre, Txcontacto, 
+        MnTotal, MnPagado, MnSaldo, MnInicial, Chemise, 
+        MnDescuento, CodSucursal, CodUser, accion 
+    } = req.body;
+
+    try {
+        if (accion === 0) {
+            // --- LÓGICA DE INSERT ---
+            const sql = `INSERT INTO deactosgrados 
+                (CodigoActo, Nocontrato, NuCedula, Nombre, Txcontacto, MnTotal, MnPagado, MnSaldo, MnInicial, MaEdoCont, CodUser, Chemise, MnDescuento, Fecha, CodSucursal) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '1', ?, ?, ?, NOW(), ?)`;
+
+            const params = [
+                CodigoActo ?? null,
+                NoContrato ?? null,
+                NuCedula ?? null,
+                Nombre ?? null,
+                Txcontacto ?? null,
+                MnTotal ?? 0,
+                MnPagado ?? 0,
+                MnSaldo ?? 0,
+                MnInicial ?? 0,
+                CodUser ?? null,
+                Chemise ?? null,
+                MnDescuento ?? 0,
+                CodSucursal ?? null
+            ];
+
+            await db.execute(sql, params);
+            res.json({ message: "Usuario insertado correctamente" });
+
+        } else {
+            // --- LÓGICA DE UPDATE ---
+            const sql = `UPDATE deactosgrados SET 
+                NuCedula = ?, Nombre = ?, Txcontacto = ?, MnTotal = ?, 
+                MnPagado = ?, MnSaldo = ?, MnInicial = ?, MaEdoCont = '1', 
+                CodUser = ?, Chemise = ?, MnDescuento = ? 
+                WHERE CodigoActo = ? AND NoContrato = ?`;
+
+            // IMPORTANTE: En el UPDATE, el orden cambia porque CodigoActo y NoContrato van al final (en el WHERE)
+            const params = [
+                NuCedula ?? null,
+                Nombre ?? null,
+                Txcontacto ?? null,
+                MnTotal ?? 0,
+                MnPagado ?? 0,
+                MnSaldo ?? 0,
+                MnInicial ?? 0,
+                CodUser ?? null,
+                Chemise ?? null,
+                MnDescuento ?? 0,
+                CodigoActo ?? null, // Para el WHERE
+                NoContrato ?? null  // Para el WHERE
+            ];
+
+            await db.execute(sql, params);
+            res.json({ message: "Usuario actualizado correctamente" });
+            console.log("Usuario actualizado correctamente:", { CodigoActo, NoContrato, params });
+        }
+
+    } catch (error) {
+        console.error("Error al procesar usuario en el acto:", error);
+        res.status(500).json({ error: "Error en la base de datos", details: error.message });
+    }
+};

@@ -9,6 +9,7 @@ router.get('/:CodigoActo/totalPaid', actContractsController.totalPaid);
 router.get('/:CodigoActo/saldo', actContractsController.saldo);
 router.get('/:CodigoActo/usersAmount', actContractsController.getActUsersAmount);
 router.post('/recalculateTotal', actContractsController.recalculateActTotal);
+router.post('/addUser', actContractsController.addUserToAct);
 // router.post('/add', actContractsController.addActContract);
 // router.put('/update/:CoContrato', actContractsController.updateActContract);
 
