@@ -140,66 +140,88 @@ exports.addUserToAct = async (req, res) => {
     const { 
         CodigoActo, NoContrato, NuCedula, Nombre, Txcontacto, 
         MnTotal, MnPagado, MnSaldo, MnInicial, Chemise, 
-        MnDescuento, CodSucursal, CodUser, accion 
+        MnDescuento, CodSucursal, CodUser 
     } = req.body;
 
     try {
-        if (accion === 0) {
-            // --- LÓGICA DE INSERT ---
-            const sql = `INSERT INTO deactosgrados 
-                (CodigoActo, Nocontrato, NuCedula, Nombre, Txcontacto, MnTotal, MnPagado, MnSaldo, MnInicial, MaEdoCont, CodUser, Chemise, MnDescuento, Fecha, CodSucursal) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '1', ?, ?, ?, NOW(), ?)`;
+        // --- PASO 1: Evitar duplicidad de PERSONA en el mismo ACTO ---
+        // Esto detiene que registres a "Juan" dos veces en el "Acto A"
+        const sqlCheckPersona = "SELECT COUNT(*) as yaRegistrado FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?";
+        const [resPersona] = await db.execute(sqlCheckPersona, [CodigoActo, NuCedula]);
 
-            const params = [
-                CodigoActo ?? null,
-                NoContrato ?? null,
-                NuCedula ?? null,
-                Nombre ?? null,
-                Txcontacto ?? null,
-                MnTotal ?? 0,
-                MnPagado ?? 0,
-                MnSaldo ?? 0,
-                MnInicial ?? 0,
-                CodUser ?? null,
-                Chemise ?? null,
-                MnDescuento ?? 0,
-                CodSucursal ?? null
-            ];
-
-            await db.execute(sql, params);
-            res.json({ message: "Usuario insertado correctamente" });
-
-        } else {
-            // --- LÓGICA DE UPDATE ---
-            const sql = `UPDATE deactosgrados SET 
-                NuCedula = ?, Nombre = ?, Txcontacto = ?, MnTotal = ?, 
-                MnPagado = ?, MnSaldo = ?, MnInicial = ?, MaEdoCont = '1', 
-                CodUser = ?, Chemise = ?, MnDescuento = ? 
-                WHERE CodigoActo = ? AND NoContrato = ?`;
-
-            // IMPORTANTE: En el UPDATE, el orden cambia porque CodigoActo y NoContrato van al final (en el WHERE)
-            const params = [
-                NuCedula ?? null,
-                Nombre ?? null,
-                Txcontacto ?? null,
-                MnTotal ?? 0,
-                MnPagado ?? 0,
-                MnSaldo ?? 0,
-                MnInicial ?? 0,
-                CodUser ?? null,
-                Chemise ?? null,
-                MnDescuento ?? 0,
-                CodigoActo ?? null, // Para el WHERE
-                NoContrato ?? null  // Para el WHERE
-            ];
-
-            await db.execute(sql, params);
-            res.json({ message: "Usuario actualizado correctamente" });
-            console.log("Usuario actualizado correctamente:", { CodigoActo, NoContrato, params });
+        if (resPersona[0].yaRegistrado > 0) {
+            return res.status(400).json({ 
+                status: 'error',
+                message: `La persona con cédula ${NuCedula} ya se encuentra inscrita en este acto de grado.` 
+            });
         }
 
+        // --- PASO 2: Verificar si el cliente existe en el sistema general ---
+        const sqlCliente = "SELECT COUNT(*) as existe FROM Clientes WHERE NuCedula = ?";
+        const [resCliente] = await db.execute(sqlCliente, [NuCedula]);
+
+        if (resCliente[0].existe === 0) {
+            return res.status(404).json({ 
+                status: 'error',
+                message: "La persona no existe en el sistema. Debe crearla primero." 
+            });
+        }
+
+        // --- PASO 3: Verificar rango de NoContrato en Configuración ---
+        const sqlConfig = "SELECT NoContrato FROM Configuracion LIMIT 1";
+        const [resConfig] = await db.execute(sqlConfig);
+        
+        const contratoLimite = parseInt(resConfig[0]?.NoContrato || 0);
+        const contratoIngresado = parseInt(NoContrato);
+
+        if (contratoIngresado > contratoLimite) {
+            return res.status(400).json({ 
+                status: 'error',
+                message: `El No. de Contrato ${NoContrato} es inválido. El máximo autorizado es ${contratoLimite}.` 
+            });
+        }
+
+        // --- PASO 4: Verificar si el NoContrato ya fue usado (en cualquier acto) ---
+        const sqlCheckContrato = "SELECT COUNT(*) as contratoUsado FROM DeActosGrados WHERE NoContrato = ?";
+        const [resContrato] = await db.execute(sqlCheckContrato, [NoContrato]);
+
+        if (resContrato[0].contratoUsado > 0) {
+            return res.status(400).json({ 
+                status: 'error',
+                message: `El No. de Contrato ${NoContrato} ya ha sido asignado a otra persona.` 
+            });
+        }
+
+        // --- PASO 5: Inserción ---
+        const sqlInsert = `INSERT INTO DeActosGrados 
+            (CodigoActo, Nocontrato, NuCedula, Nombre, Txcontacto, MnTotal, MnPagado, MnSaldo, MnInicial, MaEdoCont, CodUser, Chemise, MnDescuento, Fecha, CodSucursal) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '1', ?, ?, ?, NOW(), ?)`;
+
+        const params = [
+            CodigoActo ?? null,
+            NoContrato ?? null,
+            NuCedula ?? null,
+            Nombre ?? null,
+            Txcontacto ?? null,
+            MnTotal ?? 0,
+            MnPagado ?? 0,
+            MnSaldo ?? 0,
+            MnInicial ?? 0,
+            CodUser ?? null,
+            Chemise ?? null,
+            MnDescuento ?? 0,
+            CodSucursal ?? null
+        ];
+
+        await db.execute(sqlInsert, params);
+
+        res.json({ 
+            status: 'success',
+            message: "Estudiante registrado exitosamente en el acto." 
+        });
+
     } catch (error) {
-        console.error("Error al procesar usuario en el acto:", error);
-        res.status(500).json({ error: "Error en la base de datos", details: error.message });
+        console.error("Error en validaciones complejas:", error);
+        res.status(500).json({ error: "Error interno del servidor" });
     }
 };
