@@ -14,7 +14,7 @@ exports.getActs = async (req, res) => {
 exports.getActsUsersByCodigoActo = async (req, res) => {
     const { CodigoActo } = req.params;
     try{
-        const sql = 'SELECT NoContrato, Nombre, MnPagado, MnSaldo from deactosgrados where CodigoActo = ? ORDER BY Nombre ASC';
+        const sql = 'SELECT NoContrato, Nombre, NuCedula, MnPagado, MnSaldo from deactosgrados where CodigoActo = ? ORDER BY Nombre ASC';
         const [rows] = await db.query(sql, [CodigoActo]);
         res.json(rows);
     }catch (error){
@@ -225,3 +225,23 @@ exports.addUserToAct = async (req, res) => {
         res.status(500).json({ error: "Error interno del servidor" });
     }
 };
+
+exports.getPaymentDataByContract = async (req, res) => {
+    const { NoContrato, CodigoActo, NuCedula } = req.params;
+
+    if(!NoContrato || !CodigoActo || !NuCedula) {
+        return res.status(400).json({ 
+            status: 'error',
+            message: "Faltan parámetros requeridos: NoContrato, CodigoActo, NuCedula"
+        });
+    }
+
+    try{
+        const sql = `SELECT * FROM deactosgrados WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ?`;
+        const [rows] = await db.execute(sql, [NoContrato, CodigoActo, NuCedula]);
+        res.json({ status: 'success', data: rows });
+    } catch (error){
+        console.error("Error fetching payment data:", error);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
