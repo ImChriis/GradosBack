@@ -245,3 +245,63 @@ exports.getPaymentDataByContract = async (req, res) => {
         res.status(500).json({ error: "Error interno del servidor" });
     }
 }
+
+exports.getRecibosByUserContract = async (req, res) => {
+    const { NoContrato } = req.params;
+
+    if(!NoContrato){
+        return res.status(400).json({
+            stats: 'error',
+            message: "Falta el parámetro NoContrato"
+        })
+    }
+
+    try{
+        const sql = `SELECT NoRecibo, ferecibo, mnrecibo FROM ReciboPago WHERE NoContrato = ? ORDER BY NoRecibo`;
+        const [rows] = await db.execute(sql, [NoContrato]);
+
+        if(rows.length === 0){
+            return res.status(404).json({
+                message: 'No se encontraron recibos para este contrato'
+            })
+        }
+
+        res.json({ status: 'success', data: rows });
+    } catch (error){
+        console.error("Error fetching recibos:", error);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+}
+
+exports.getAbonosByUserContract = async (req, res) => {
+    const { NoContrato, NuCedula } = req.params;
+
+
+    try {
+        // Limpiamos cualquier espacio invisible que venga de la URL
+        const contrato = String(NoContrato).trim();
+        const cedula = String(NuCedula).trim();
+
+        console.log(`Ejecutando para: Contrato [${contrato}], Cedula [${cedula}]`);
+
+        // Usamos .query en lugar de .execute para ser más flexibles como phpMyAdmin
+        const sql = `SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito 
+                     FROM Depositos 
+                     WHERE NoContrato = ? AND NuCedula = ?`;
+        
+        const [rows] = await db.query(sql, [contrato, cedula]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: `No se encontraron abonos para Contrato: ${contrato} y Cédula: ${cedula}`
+            });
+        }
+
+        res.json({ status: 'success2', data: rows });
+
+    } catch (error) {
+        console.error("Error en la consulta:", error);
+        res.status(500).json({ error: "Error interno del servidor" });
+    }
+};
