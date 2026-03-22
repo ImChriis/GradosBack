@@ -14,7 +14,7 @@ exports.getActs = async (req, res) => {
 exports.getActsUsersByCodigoActo = async (req, res) => {
     const { CodigoActo } = req.params;
     try{
-        const sql = 'SELECT NoContrato, Nombre, NuCedula, MnPagado, MnSaldo from deactosgrados where CodigoActo = ? ORDER BY Nombre ASC';
+        const sql = 'SELECT NoContrato, Nombre, NuCedula, MnPagado, MnSaldo, MnContrato, MnDescuento, MnInicial from deactosgrados where CodigoActo = ? ORDER BY Nombre ASC';
         const [rows] = await db.query(sql, [CodigoActo]);
         res.json(rows);
     }catch (error){
@@ -287,9 +287,9 @@ exports.getAbonosByUserContract = async (req, res) => {
         // Usamos .query en lugar de .execute para ser más flexibles como phpMyAdmin
         const sql = `SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito 
                      FROM Depositos 
-                     WHERE NoContrato = ? AND NuCedula = ?`;
+                     WHERE NoContrato = ? AND NuCedula = ? AND NoRecibo = ?`;
         
-        const [rows] = await db.query(sql, [contrato, cedula]);
+        const [rows] = await db.query(sql, [contrato, cedula, NoRecibo]);
 
         if (rows.length === 0) {
             return res.status(404).json({

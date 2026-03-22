@@ -3,7 +3,7 @@ const router = express.Router();
 const actContractsController = require('./actContractsController');
 
 router.get('/', actContractsController.getActs);
-router.get('/abonos/:NoContrato/:NuCedula', actContractsController.getAbonosByUserContract); 
+router.get('/abonos/:NoContrato/:NuCedula/:NoRecibo', actContractsController.getAbonosByUserContract); 
 router.get('/:CodigoActo/users', actContractsController.getActsUsersByCodigoActo);
 router.get('/:CodigoActo/total', actContractsController.getActTotal);
 router.get('/:CodigoActo/totalPaid', actContractsController.totalPaid);
