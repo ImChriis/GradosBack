@@ -26,7 +26,7 @@ exports.getActsUsersByCodigoActo = async (req, res) => {
 exports.getActTotal = async (req, res) => {
     const { CodigoActo } = req.params;
     try{
-        const sql = 'SELECT SUM(MnTotal) AS MontoTotal FROM deactosgrados WHERE CodigoActo = ?';
+        const sql = 'SELECT SUM(MnContrato) AS MontoTotal FROM deactosgrados WHERE CodigoActo = ?';
         const [rows] = await db.query(sql, [CodigoActo]);
 
         const total = rows[0].MontoTotal || 0;
@@ -56,7 +56,7 @@ exports.recalculateActTotal = async (req, res) => {
         // 2. Actualizar totales y saldos de los estudiantes
         // Nota: En MariaDB/MySQL no hace falta poner [dbo]
         await connection.query(
-            "UPDATE DeActosGrados SET MnTotal = ?, MnSaldo = ? - MnPagado WHERE CodigoActo = ?",
+            "UPDATE DeActosGrados SET MnContrato = ?, MnSaldo = ? - MnPagado WHERE CodigoActo = ?",
             [nuevoMonto, nuevoMonto, codigoActo]
         );
 
@@ -99,7 +99,7 @@ exports.saldo = async (req, res) => {
     try{
         const sql = `
             SELECT 
-                COALESCE(SUM(MnTotal), 0) AS total, 
+                COALESCE(SUM(MnContrato), 0) AS total, 
                 COALESCE(SUM(MnPagado), 0) AS pagado, 
                 COALESCE(SUM(MnSaldo), 0) AS saldo 
             FROM DeActosGrados 
@@ -119,7 +119,7 @@ exports.getActUsersAmount = async (req, res) => {
         const sql = `
             SELECT 
                 COUNT(NoContrato) AS cantidadEstudiantes,
-                CAST(COALESCE(SUM(MnTotal), 0) AS DECIMAL(10,2)) AS montoTotal,
+                CAST(COALESCE(SUM(MnContrato), 0) AS DECIMAL(10,2)) AS montoTotal,
                 CAST(COALESCE(SUM(MnPagado), 0) AS DECIMAL(10,2)) AS montoPagado,
                 CAST(COALESCE(SUM(MnSaldo), 0) AS DECIMAL(10,2)) AS montoSaldo
             FROM DeActosGrados 
@@ -139,7 +139,7 @@ exports.getActUsersAmount = async (req, res) => {
 exports.addUserToAct = async (req, res) => {
     const { 
         CodigoActo, NoContrato, NuCedula, Nombre, Txcontacto, 
-        MnTotal, MnPagado, MnSaldo, MnInicial, Chemise, 
+        MnContrato, MnPagado, MnSaldo, MnInicial, Chemise, 
         MnDescuento, CodSucursal, CodUser 
     } = req.body;
 
@@ -194,7 +194,7 @@ exports.addUserToAct = async (req, res) => {
 
         // --- PASO 5: Inserción ---
         const sqlInsert = `INSERT INTO DeActosGrados 
-            (CodigoActo, Nocontrato, NuCedula, Nombre, Txcontacto, MnTotal, MnPagado, MnSaldo, MnInicial, MaEdoCont, CodUser, Chemise, MnDescuento, Fecha, CodSucursal) 
+            (CodigoActo, Nocontrato, NuCedula, Nombre, Txcontacto, MnContrato, MnPagado, MnSaldo, MnInicial, MaEdoCont, CodUser, Chemise, MnDescuento, Fecha, CodSucursal) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '1', ?, ?, ?, NOW(), ?)`;
 
         const params = [
@@ -203,7 +203,7 @@ exports.addUserToAct = async (req, res) => {
             NuCedula ?? null,
             Nombre ?? null,
             Txcontacto ?? null,
-            MnTotal ?? 0,
+            MnContrato ?? 0,
             MnPagado ?? 0,
             MnSaldo ?? 0,
             MnInicial ?? 0,
@@ -274,7 +274,7 @@ exports.getRecibosByUserContract = async (req, res) => {
 }
 
 exports.getAbonosByUserContract = async (req, res) => {
-    const { NoContrato, NuCedula } = req.params;
+    const { NoContrato, NuCedula, NoRecibo } = req.params;
 
 
     try {
