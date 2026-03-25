@@ -257,7 +257,7 @@ exports.getRecibosByUserContract = async (req, res) => {
     }
 
     try{
-        const sql = `SELECT NoRecibo, ferecibo, mnrecibo FROM ReciboPago WHERE NoContrato = ? ORDER BY NoRecibo`;
+        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec FROM ReciboPago WHERE NoContrato = ? ORDER BY NoRecibo`;
         const [rows] = await db.execute(sql, [NoContrato]);
 
         if(rows.length === 0){
@@ -282,7 +282,7 @@ exports.getAbonosByUserContract = async (req, res) => {
         const contrato = String(NoContrato).trim();
         const cedula = String(NuCedula).trim();
 
-        console.log(`Ejecutando para: Contrato [${contrato}], Cedula [${cedula}]`);
+        // console.log(`Ejecutando para: Contrato [${contrato}], Cedula [${cedula}]`);
 
         // Usamos .query en lugar de .execute para ser más flexibles como phpMyAdmin
         const sql = `SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito 
