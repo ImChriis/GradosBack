@@ -305,3 +305,58 @@ exports.getAbonosByUserContract = async (req, res) => {
         res.status(500).json({ error: "Error interno del servidor" });
     }
 };
+
+exports.createReciboPago = async (req, res) => {
+    // Extraemos los datos del body (vienen desde tu formulario en Angular)
+    const { 
+        NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
+        tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
+        Anulado, Tipo, CodigoActo 
+    } = req.body;
+
+    try {
+        // Limpiamos strings por seguridad (como en tu ejemplo anterior)
+        const reciboId = String(NoRecibo).trim();
+        const contratoId = String(NoContrato).trim();
+        const cedulaId = String(NuCedula).trim();
+
+        const sql = `INSERT INTO ReciboPago (
+                        NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
+                        tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
+                        Anulado, Tipo, CodigoActo
+                    ) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        
+        // Pasamos los valores en el orden exacto de los '?'
+        const [result] = await db.query(sql, [
+            reciboId, 
+            ferecibo, // La fecha que viene del frontend
+            cedulaId, 
+            CodSucursal, 
+            contratoId, 
+            tprecibo, 
+            mnrecibo, 
+            mnsaldorec, 
+            TxConcepRec, 
+            CodUser, 
+            Anulado ? 1 : 0, // Convertimos boolean a 1/0 para la DB
+            Tipo, 
+            CodigoActo
+        ]);
+
+        // Si se insertó correctamente, devolvemos el éxito
+        res.status(201).json({ 
+            status: 'success', 
+            message: 'Recibo creado correctamente',
+            affectedRows: result.affectedRows 
+        });
+
+    } catch (error) {
+        console.error("Error al insertar el recibo:", error);
+        res.status(500).json({ 
+            status: 'error',
+            message: "Error interno al intentar guardar el recibo",
+            details: error.message 
+        });
+    }
+};

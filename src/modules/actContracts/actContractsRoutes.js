@@ -13,6 +13,7 @@ router.get('/:CodigoActo/:NuCedula/:NoContrato', actContractsController.getPayme
 router.get('/:NoContrato', actContractsController.getRecibosByUserContract);
 router.post('/recalculateTotal', actContractsController.recalculateActTotal);
 router.post('/addUser', actContractsController.addUserToAct);
+router.post ('/createRecibo', actContractsController.createReciboPago);
 // router.post('/add', actContractsController.addActContract);
 // router.put('/update/:CoContrato', actContractsController.updateActContract);
 
