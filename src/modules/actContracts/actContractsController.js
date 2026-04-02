@@ -311,7 +311,7 @@ exports.createReciboPago = async (req, res) => {
     const { 
         NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
         tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
-        Anulado, Tipo, CodigoActo 
+        Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan
     } = req.body;
 
     try {
@@ -323,9 +323,9 @@ exports.createReciboPago = async (req, res) => {
         const sql = `INSERT INTO ReciboPago (
                         NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
                         tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
-                        Anulado, Tipo, CodigoActo
+                        Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan
                     ) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         
         // Pasamos los valores en el orden exacto de los '?'
         const [result] = await db.query(sql, [

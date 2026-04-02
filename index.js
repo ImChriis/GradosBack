@@ -8,6 +8,7 @@ const institutionsRoutes = require('./src/modules/institutions/institutionRoutes
 const actPlacesRoutes = require('./src/modules/ActPlaces/actPlacesRoutes');
 const banksRoutes = require('./src/modules/banks/banksRoutes');
 const actContractsRoutes = require('./src/modules/actContracts/actContractsRoutes');
+const metodoPagoRoutes = require('./src/modules/metodoPago/metodoPagoRoutes');
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use('/institutions', institutionsRoutes);
 app.use('/actPlaces', actPlacesRoutes);
 app.use('/banks', banksRoutes);
 app.use('/actContracts', actContractsRoutes);
+app.use('/metodoPago', metodoPagoRoutes);
 
 //Desarrollo
 app.listen(3000, () => {
