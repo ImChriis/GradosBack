@@ -3,6 +3,7 @@ const router = express.Router();
 const clientsController = require('./clientsController');
 
 router.get('/', clientsController.getClients);
+router.get('/:nucedula', clientsController.getClientsByCedula);
 router.post('/add', clientsController.addClient);
 router.put('/update/:id', clientsController.updateClient);
 

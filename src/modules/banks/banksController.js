@@ -12,15 +12,15 @@ exports.getBanks = async (req, res) => {
 }
 
 exports.addBank = async (req, res) => {
-    const { Bancos } = req.body;
+    const { Bancos, Codigo, Status } = req.body;
 
     if(!Bancos){
         return res.status(400).json({ error: 'Missing required field: Bancos is mandatory' });
     }
 
     try{
-        const sql = 'INSERT INTO bancos (Bancos) VALUES (?)';
-        const [rows] = await db.query(sql, [Bancos]);
+        const sql = 'INSERT INTO bancos (Bancos, Codigo, Status) VALUES (?, ?, ?)';
+        const [rows] = await db.query(sql, [Bancos, Codigo, Status]);
 
         res.status(201).json({
             message: 'Bank added successfully',
@@ -34,15 +34,15 @@ exports.addBank = async (req, res) => {
 
 exports.updateBank = async (req, res) => {
     const { id } = req.params;
-    const { Bancos } = req.body || {};
+    const { Bancos, Codigo, Status } = req.body || {};
 
     if(!id || !Bancos){
         return res.status(400).json({ error: 'Missing required fields: id and Bancos are mandatory' });
     }
 
     try{
-        const sql = 'UPDATE bancos SET Bancos = ? WHERE id = ?';
-        const [rows] = await db.query(sql, [Bancos, id]);
+        const sql = 'UPDATE bancos SET Bancos = ?, Codigo = ?, Status = ? WHERE id = ?';
+        const [rows] = await db.query(sql, [Bancos, Codigo, Status, id]);
         
         if(rows.affectedRows === 0){
             return res.status(404).json({ error: 'Bank not found or no changes made' });

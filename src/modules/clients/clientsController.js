@@ -68,3 +68,16 @@ exports.updateClient = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 }
+
+exports.getClientsByCedula = async (req, res) => {
+    const { nucedula } = req.params;
+
+    try{
+        const sql = 'SELECT * FROM clientes WHERE nucedula = ?';
+        const [rows] = await db.query(sql, [nucedula]);
+        res.json(rows[0]);
+    }catch (error) {
+        console.error('Error fetching client by cedula:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+}
