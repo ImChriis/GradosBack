@@ -3,174 +3,652 @@ const ExcelJS = require('exceljs');
 const path = require('path');
 const db = require('../../config/db');
 
-exports.actPlacesPdf = async (req, res) => {
-    // 1. Configuración del documento
+exports.specialitiesPdf = async (req, res) => {
+    const { usuarioReporte } = req.params;
+
     const doc = new PDFDocument({
         size: 'A4',
-        margins: { top: 50, bottom: 50, left: 50, right: 50 },
+        margins: { top: 40, bottom: 20, left: 50, right: 50 },
         bufferPages: true 
     });
 
-    // 2. Cabeceras de respuesta para el navegador
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename=reporte-especialidades.pdf');
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+
+    const addHeader = (doc, logoPath, usuario) => {
+        try {
+            doc.image(logoPath, 50, 35, { width: 65 });
+        } catch (error) {
+            console.log("Error logo");
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
+
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuario}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        doc.fontSize(12).font('Helvetica-Bold').text("Reporte de Especialidades", 50, 95, { align: 'center' });
+        doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+    };
+
+    const drawTableHeader = (doc, y) => {
+        // Anchos ajustados: Código (70), Título (212), Especialidad (213) = 495 total
+        const colWidths = { cod: 70, tit: 212, esp: 213 };
+        const rowHeight = 20;
+        doc.fillColor('#000000').fontSize(9).font('Helvetica-Bold');
+        let headX = 50;
+        const headers = ["CÓDIGO", "TÍTULO", "ESPECIALIDAD"];
+        
+        headers.forEach((h, i) => {
+            const w = Object.values(colWidths)[i];
+            doc.rect(headX, y, w, rowHeight).stroke();
+            doc.text(h, headX, y + 5, { width: w, align: 'center' });
+            headX += w;
+        });
+        return y + rowHeight;
+    };
+
+    addHeader(doc, logoPath, usuarioReporte);
+
+    try {
+        const [rows] = await db.query("SELECT CodigoEsp, Titulo, Especialidad FROM especialidad ORDER BY CodigoEsp ASC");
+
+        let currentY = 130; 
+        const rowHeight = 20;
+        const colWidths = { cod: 70, tit: 212, esp: 213 };
+
+        currentY = drawTableHeader(doc, currentY);
+        doc.font('Helvetica').fontSize(8);
+
+        rows.forEach((item, index) => {
+            if (index > 0 && index % 22 === 0) {
+                doc.addPage();
+                addHeader(doc, logoPath, usuarioReporte);
+                currentY = 130;
+                currentY = drawTableHeader(doc, currentY);
+                doc.font('Helvetica').fontSize(8);
+            }
+
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, currentY, 495, rowHeight).fill();
+            }
+
+            doc.fillColor('#000000');
+            let rX = 50;
+            const dataArr = [item.CodigoEsp, item.Titulo, item.Especialidad];
+            const keys = Object.keys(colWidths);
+
+            dataArr.forEach((val, i) => {
+                const w = colWidths[keys[i]];
+                doc.rect(rX, currentY, w, rowHeight).stroke();
+                const isTextCol = (i === 1 || i === 2);
+                doc.text(val?.toString() || '', rX + (isTextCol ? 5 : 0), currentY + 6, { 
+                    width: isTextCol ? w - 10 : w, 
+                    align: isTextCol ? 'left' : 'center',
+                    lineBreak: false 
+                });
+                rX += w;
+            });
+            currentY += rowHeight;
+        });
+
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            const isLastPage = (i === (range.start + range.count - 1));
+            let footerBaseY = isLastPage ? Math.min(currentY + 15, 610) : 610; 
+
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            doc.fontSize(9).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { align: 'center', width: 495 });
+
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, 785, { align: 'right', width: 495 });
+        }
+
+    } catch (err) {
+        console.error(err);
+    }
+    doc.end();
+};
+
+exports.specialitiesExcel = async (req, res) => {
+    try {
+        const { usuarioReporte } = req.params;
+        const [rows] = await db.query("SELECT CodigoEsp, Titulo, Especialidad FROM especialidad ORDER BY CodigoEsp ASC");
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Reporte Especialidades');
+
+        const logoPath = path.join(__dirname, 'logo.png');
+        const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+        worksheet.addImage(logoId, {
+            tl: { col: 0.1, row: 1.2 },
+            ext: { width: 60, height: 40 }
+        });
+        worksheet.getRow(2).height = 50;
+
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const metaCell = worksheet.getCell('C2'); // Movido a C porque ya no hay D
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        ['A', 'B', 'C'].forEach(col => worksheet.getCell(`${col}5`).border = { bottom: { style: 'thin' } });
+        worksheet.mergeCells('A6:C6');
+        const tCell = worksheet.getCell('A6');
+        tCell.value = "Reporte de Especialidades";
+        tCell.font = { bold: true, size: 13 };
+        tCell.alignment = { horizontal: 'center' };
+        ['A', 'B', 'C'].forEach(col => worksheet.getCell(`${col}6`).border = { bottom: { style: 'thin' } });
+
+        worksheet.columns = [
+            { key: 'cod', width: 15 },
+            { key: 'tit', width: 45 },
+            { key: 'esp', width: 45 }
+        ];
+
+        const hRow = worksheet.getRow(8);
+        hRow.values = ["CÓDIGO", "TÍTULO", "ESPECIALIDAD"];
+        hRow.eachCell(c => {
+            c.font = { bold: true };
+            c.alignment = { horizontal: 'center' };
+            c.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+        });
+
+        rows.forEach((item, index) => {
+            const row = worksheet.addRow([item.CodigoEsp, item.Titulo, item.Especialidad]);
+            const esPar = (index + 1) % 2 === 0;
+            row.eachCell((cell, colNum) => {
+                cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+                cell.alignment = { horizontal: colNum === 1 ? 'center' : 'left', vertical: 'middle' };
+                if (esPar) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0' } };
+            });
+        });
+
+        const lastRowNumber = worksheet.lastRow.number;
+        const lineRow = lastRowNumber + 2;
+
+        ['A', 'B', 'C'].forEach(col => {
+            worksheet.getCell(`${col}${lineRow}`).border = { bottom: { style: 'thin' } };
+        });
+        
+        const rowF1 = lineRow + 1;
+        worksheet.mergeCells(`A${rowF1}:C${rowF1}`);
+        const f1 = worksheet.getCell(`A${rowF1}`);
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f1.alignment = { horizontal: 'center' };
+        f1.font = { name: 'Arial', size: 9 };
+
+        const rowF2 = lineRow + 2;
+        worksheet.mergeCells(`A${rowF2}:C${rowF2}`);
+        const f2 = worksheet.getCell(`A${rowF2}`);
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+        f2.alignment = { horizontal: 'center' };
+        f2.font = { name: 'Arial', size: 9 };
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=reporte-especialidades.xlsx');
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        res.status(500).send("Error");
+    }
+};
+
+exports.institutionsPdf = async (req, res) => {
+    const { usuarioReporte } = req.params;
+
+    const doc = new PDFDocument({
+        size: 'A4',
+        // Reducimos el margen inferior para que no dispare saltos automáticos
+        margins: { top: 40, bottom: 20, left: 50, right: 50 },
+        bufferPages: true 
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename=reporte-instituciones.pdf');
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+
+    const addHeader = (doc, logoPath, usuario) => {
+        try {
+            doc.image(logoPath, 50, 35, { width: 65 });
+        } catch (error) {
+            console.log("Error logo");
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
+
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuario}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        doc.fontSize(12).font('Helvetica-Bold').text("Reporte de Instituciones", 50, 95, { align: 'center' });
+        doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+    };
+
+    const drawTableHeader = (doc, y) => {
+        const colWidths = { cod: 60, sig: 80, nom: 270, tip: 85 };
+        const rowHeight = 20;
+        doc.fillColor('#000000').fontSize(9).font('Helvetica-Bold');
+        let headX = 50;
+        const headers = ["CÓDIGO", "SIGLAS", "NOMBRE INSTITUCIÓN", "TIPO"];
+        
+        headers.forEach((h, i) => {
+            const w = Object.values(colWidths)[i];
+            doc.rect(headX, y, w, rowHeight).stroke();
+            doc.text(h, headX, y + 5, { width: w, align: 'center' });
+            headX += w;
+        });
+        return y + rowHeight;
+    };
+
+    addHeader(doc, logoPath, usuarioReporte);
+
+    try {
+        const [rows] = await db.query("SELECT CodigoInst, siglas, nbinstitucion, tpinstitucion FROM instituciones ORDER BY CodigoInst ASC");
+
+        let currentY = 130; 
+        const rowHeight = 20;
+        const colWidths = { cod: 60, sig: 80, nom: 270, tip: 85 };
+
+        currentY = drawTableHeader(doc, currentY);
+        doc.font('Helvetica').fontSize(8);
+
+        rows.forEach((inst, index) => {
+            // Control manual estricto: máximo 22 filas por página
+            if (index > 0 && index % 22 === 0) {
+                doc.addPage();
+                addHeader(doc, logoPath, usuarioReporte);
+                currentY = 130;
+                currentY = drawTableHeader(doc, currentY);
+                doc.font('Helvetica').fontSize(8);
+            }
+
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, currentY, 495, rowHeight).fill();
+            }
+
+            doc.fillColor('#000000');
+            let rX = 50;
+            
+            const dataArr = [inst.CodigoInst, inst.siglas, inst.nbinstitucion, inst.tpinstitucion];
+            const keys = Object.keys(colWidths);
+
+            dataArr.forEach((val, i) => {
+                const w = colWidths[keys[i]];
+                doc.rect(rX, currentY, w, rowHeight).stroke();
+                doc.text(val?.toString() || '', rX + (i === 2 ? 5 : 0), currentY + 6, { 
+                    width: i === 2 ? w - 10 : w, 
+                    align: i === 2 ? 'left' : 'center',
+                    lineBreak: false 
+                });
+                rX += w;
+            });
+
+            currentY += rowHeight;
+        });
+
+        // --- ESTAMPADO FINAL (FOOTER FIJO) ---
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            
+            // Definimos la base del footer bien abajo (A4 tiene ~841 de alto)
+            const footerBaseY = 610; 
+
+            // 1. Línea negra
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            
+            // 2. Texto centrado (Dos líneas)
+            doc.fontSize(9).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { 
+                align: 'center', 
+                width: 495 
+            });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { 
+                align: 'center', 
+                width: 495 
+            });
+
+            // 3. Numeración abajo a la derecha (independiente)
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, footerBaseY + 200, { 
+                    align: 'right', 
+                    width: 495 
+                });
+        }
+
+    } catch (err) {
+        console.error(err);
+    }
+    doc.end();
+};
+
+exports.institutionsExcel = async (req, res) => {
+    try {
+        const { usuarioReporte } = req.params;
+        const [rows] = await db.query("SELECT CodigoInst, siglas, nbinstitucion, tpinstitucion FROM instituciones ORDER BY CodigoInst ASC");
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Reporte Instituciones');
+
+        // 1. Logo centrado en área A2
+        const logoPath = path.join(__dirname, 'logo.png');
+        const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+        worksheet.addImage(logoId, {
+            tl: { col: 0.2, row: 1.2 },
+            ext: { width: 60, height: 40 },
+            editAs: 'oneCell'
+        });
+        worksheet.getRow(2).height = 50;
+
+        // 2. Info Empresa
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        // 3. Metadatos
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const metaCell = worksheet.getCell('D2');
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        // 4. Título con borde inferior
+        ['A', 'B', 'C', 'D'].forEach(col => worksheet.getCell(`${col}5`).border = { bottom: { style: 'thin' } });
+        worksheet.mergeCells('A6:D6');
+        const tCell = worksheet.getCell('A6');
+        tCell.value = "Reporte de Instituciones";
+        tCell.font = { bold: true, size: 13 };
+        tCell.alignment = { horizontal: 'center' };
+        ['A', 'B', 'C', 'D'].forEach(col => worksheet.getCell(`${col}6`).border = { bottom: { style: 'thin' } });
+
+        // 5. Configuración Columnas
+        worksheet.columns = [
+            { key: 'cod', width: 12 },
+            { key: 'sig', width: 15 },
+            { key: 'nom', width: 50 },
+            { key: 'tip', width: 20 }
+        ];
+
+        // 6. Cabeceras
+        const hRow = worksheet.getRow(8);
+        hRow.values = ["CÓDIGO", "SIGLAS", "NOMBRE INSTITUCIÓN", "TIPO"];
+        hRow.eachCell(c => {
+            c.font = { bold: true, color: { argb: '000000' } };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF' } }; // Cabecera negra para contraste
+            c.alignment = { horizontal: 'center' };
+            c.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+        });
+
+        // 7. Datos
+        rows.forEach((inst, index) => {
+            const row = worksheet.addRow([inst.CodigoInst, inst.siglas, inst.nbinstitucion, inst.tpinstitucion]);
+            const esPar = (index + 1) % 2 === 0;
+            row.eachCell((cell, colNum) => {
+                cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+                cell.alignment = { horizontal: colNum === 3 ? 'left' : 'center', vertical: 'middle' };
+                // Efecto cebra
+                if (esPar) {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0' } };
+                }
+            });
+        });
+
+        // 8. Footer (Línea + 2 filas de texto)
+        const lastRowNumber = worksheet.lastRow.number;
+        const lineRow = lastRowNumber + 2;
+
+        // Línea divisoria
+        ['A', 'B', 'C', 'D'].forEach(col => {
+            worksheet.getCell(`${col}${lineRow}`).border = { bottom: { style: 'thin' } };
+        });
+        
+        // Fila 1: Instagram
+        const rowF1 = lineRow + 1;
+        worksheet.mergeCells(`A${rowF1}:D${rowF1}`);
+        const f1 = worksheet.getCell(`A${rowF1}`);
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f1.alignment = { horizontal: 'center' };
+        f1.font = { name: 'Arial', size: 9 };
+
+        // Fila 2: Correo
+        const rowF2 = lineRow + 2;
+        worksheet.mergeCells(`A${rowF2}:D${rowF2}`);
+        const f2 = worksheet.getCell(`A${rowF2}`);
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+        f2.alignment = { horizontal: 'center' };
+        f2.font = { name: 'Arial', size: 9 };
+
+        // Configuración de descarga
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=reporte-instituciones.xlsx');
+        
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error al generar el Excel");
+    }
+};
+
+exports.actPlacesPdf = async (req, res) => {
+    const { usuarioReporte } = req.params;
+
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 20, left: 50, right: 50 },
+        bufferPages: true 
+    });
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename=reporte-lugares.pdf');
     doc.pipe(res);
 
-    // Ruta del logo (Asegúrate de que el archivo exista en esta ruta)
     const logoPath = path.join(__dirname, 'logo.png'); 
 
-    // --- FUNCIÓN PARA ENCABEZADO REPETIBLE ---
-    let addHeader = (doc, logoPath) => {
+    const addHeader = (doc, logoPath, usuario) => {
         try {
-            doc.image(logoPath, 50, 40, { width: 140 });
+            doc.image(logoPath, 50, 35, { width: 65 });
         } catch (error) {
-            doc.fontSize(10).font('Helvetica-Bold').text("GRADOS DE VENEZUELA C.A.", 50, 50);
+            console.log("Error logo");
         }
 
-        doc.fontSize(10).font('Helvetica')
-            .text("Grado`s de Venezuela, C.A.", 350, 45, { align: 'right' })
-            .text("J-30591547-4", 350, 58, { align: 'right' });
+        doc.fontSize(9).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
 
-        // Líneas dobles envolviendo el título
-        doc.moveTo(50, 100).lineTo(545, 100).lineWidth(0.5).stroke(); 
-        
-        doc.fontSize(13)
-            .font('Helvetica-Bold')
-            .text("Reporte de Lugares de Acto", 50, 110, { align: 'center' });
-            
-        doc.moveTo(50, 130).lineTo(545, 130).lineWidth(0.5).stroke(); 
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuario}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        doc.fontSize(12).font('Helvetica-Bold').text("Reporte de Lugares de Acto", 50, 95, { align: 'center' });
+        doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
     };
 
-    // --- FUNCIÓN PARA PIE DE PÁGINA ---
-    let drawFooter = (doc, yPos) => {
-        // Línea antes del footer
-        doc.moveTo(50, yPos + 10).lineTo(545, yPos + 10).lineWidth(0.5).stroke();
-        
-        doc.fontSize(10)
-            .font('Helvetica')
-            .fillColor('#000000')
-            .text("Para Mayor Información Visite www.gradosdevenezuela.com", 50, yPos + 25, { align: 'center' })
-            .text("o escribanos a los correos info@gradosdevenezuela.com", 50, yPos + 40, { align: 'center' });
-    };
-
-    // Primera página
-    addHeader(doc, logoPath);
-
-    try {
-        // Consulta a la base de datos
-        const [lugares] = await db.query("SELECT CoLugar, TxLugar, Capacidad, MaTipoLugar FROM lugaracto WHERE Activo = 1 ORDER BY CoLugar ASC");
-
-        let currentY = 160;
-        const rowHeight = 25;
-        const colWidths = {
-            codigo: 60,
-            nombre: 250,
-            capacidad: 100,
-            tipo: 85
-        };
-
-        // --- CABECERA DE TABLA (Fondo blanco, texto centrado) ---
-        doc.fillColor('#000000').fontSize(10).font('Helvetica-Bold');
-        
+    const drawTableHeader = (doc, y) => {
+        const colWidths = { codigo: 60, nombre: 250, capacidad: 100, tipo: 85 };
+        const rowHeight = 20;
+        doc.fillColor('#000000').fontSize(9).font('Helvetica-Bold');
         let headX = 50;
         const headers = ["CODIGO", "NOMBRE DEL LUGAR DE ACTOS", "CAPACIDAD", "TIPO"];
         
         headers.forEach((h, i) => {
             const keys = ['codigo', 'nombre', 'capacidad', 'tipo'];
             const w = colWidths[keys[i]];
-            
-            // Dibujar recuadro de la celda (borde negro)
-            doc.rect(headX, currentY, w, rowHeight).lineWidth(0.5).stroke();
-            // Texto centrado
-            doc.text(h, headX, currentY + 8, { width: w, align: 'center' });
+            doc.rect(headX, y, w, rowHeight).stroke();
+            doc.text(h, headX, y + 5, { width: w, align: 'center' });
             headX += w;
         });
+        return y + rowHeight;
+    };
 
-        doc.font('Helvetica').fontSize(9);
-        currentY += rowHeight;
+    addHeader(doc, logoPath, usuarioReporte);
 
-        // --- FILAS DE DATOS ---
+    try {
+        const [lugares] = await db.query("SELECT CoLugar, TxLugar, Capacidad, MaTipoLugar FROM lugaracto WHERE Activo = 1 ORDER BY CoLugar ASC");
+
+        let currentY = 130; 
+        const rowHeight = 20;
+        const colWidths = { codigo: 60, nombre: 250, capacidad: 100, tipo: 85 };
+
+        currentY = drawTableHeader(doc, currentY);
+        doc.font('Helvetica').fontSize(8);
+
         lugares.forEach((lugar, index) => {
-            // Control de salto de página
-            if (currentY > 720) {
+            // Máximo 25 filas para asegurar que el footer dinámico no rompa la página
+            if (index > 0 && index % 25 === 0) {
                 doc.addPage();
-                addHeader(doc, logoPath);
-                currentY = 160;
-                doc.font('Helvetica').fontSize(9);
+                addHeader(doc, logoPath, usuarioReporte);
+                currentY = 130;
+                currentY = drawTableHeader(doc, currentY);
+                doc.font('Helvetica').fontSize(8);
             }
 
-            const esPar = (index + 1) % 2 === 0;
-
-            // 1. Dibujar Fondo si es par (Amarillo)
-            if (esPar) {
+            if ((index + 1) % 2 === 0) {
                 doc.fillColor('#FFFFE0').rect(50, currentY, 495, rowHeight).fill();
             }
 
-            // 2. Dibujar Bordes y Texto (Encima del fondo)
-            doc.fillColor('#000000'); // Volver a negro para el contenido
+            doc.fillColor('#000000');
             let rowX = 50;
             
-            // Código
-            doc.rect(rowX, currentY, colWidths.codigo, rowHeight).lineWidth(0.5).stroke();
-            doc.text(lugar.CoLugar.toString(), rowX, currentY + 8, { width: colWidths.codigo, align: 'center' });
+            doc.rect(rowX, currentY, colWidths.codigo, rowHeight).stroke();
+            doc.text(lugar.CoLugar.toString(), rowX, currentY + 6, { width: colWidths.codigo, align: 'center' });
             rowX += colWidths.codigo;
 
-            // Nombre
-            doc.rect(rowX, currentY, colWidths.nombre, rowHeight).lineWidth(0.5).stroke();
-            doc.text(lugar.TxLugar || '', rowX + 5, currentY + 8, { width: colWidths.nombre - 10, lineBreak: false });
+            doc.rect(rowX, currentY, colWidths.nombre, rowHeight).stroke();
+            doc.text(lugar.TxLugar || '', rowX + 5, currentY + 6, { width: colWidths.nombre - 10, lineBreak: false });
             rowX += colWidths.nombre;
 
-            // Capacidad
-            doc.rect(rowX, currentY, colWidths.capacidad, rowHeight).lineWidth(0.5).stroke();
-            doc.text(lugar.Capacidad ? lugar.Capacidad.toString() : '0', rowX, currentY + 8, { width: colWidths.capacidad, align: 'center' });
+            doc.rect(rowX, currentY, colWidths.capacidad, rowHeight).stroke();
+            doc.text(lugar.Capacidad?.toString() || '0', rowX, currentY + 6, { width: colWidths.capacidad, align: 'center' });
             rowX += colWidths.capacidad;
 
-            // Tipo
-            doc.rect(rowX, currentY, colWidths.tipo, rowHeight).lineWidth(0.5).stroke();
+            doc.rect(rowX, currentY, colWidths.tipo, rowHeight).stroke();
             const tipoLabel = lugar.MaTipoLugar == 1 ? 'Teatro Techado' : 'Salón / Otros';
-            doc.text(tipoLabel, rowX, currentY + 8, { width: colWidths.tipo, align: 'center' });
+            doc.text(tipoLabel, rowX, currentY + 6, { width: colWidths.tipo, align: 'center' });
 
             currentY += rowHeight;
         });
 
-        // Dibujar el pie de página justo debajo de la última fila
-        drawFooter(doc, currentY);
+        // --- ESTAMPADO FINAL (ADAPTATIVO) ---
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            
+            // Si es la última página, lo pega a la tabla. Si no, lo deja abajo.
+            const isLastPage = (i === (range.start + range.count - 1));
+            let footerBaseY = isLastPage ? currentY + 15 : 750;
 
-    } catch (dbError) {
-        console.error("Error en reporte:", dbError);
-        doc.fillColor('red').text("Error al cargar datos de la base de datos.", 50, 200);
+            // Limite de seguridad para que no se salga de la hoja si la tabla es muy larga
+            if (footerBaseY > 760) footerBaseY = 760;
+
+            // 1. Línea negra
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            
+            // 2. Texto centrado
+            doc.fontSize(9).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { 
+                align: 'center', 
+                width: 495 
+            });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { 
+                align: 'center', 
+                width: 495 
+            });
+
+            // 3. Numeración (Fija al final para que no baile)
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, 785, { 
+                    align: 'right', 
+                    width: 495 
+                });
+        }
+
+    } catch (err) {
+        console.error(err);
     }
-
-    // Finalizar
     doc.end();
 };
 
 exports.actPlacesExcel = async (req, res) => {
     try {
+        // Recibir el usuario desde el body
+        const { usuarioReporte } = req.params;
+
         const [lugares] = await db.query("SELECT CoLugar, TxLugar, Capacidad, MaTipoLugar FROM lugaracto WHERE Activo = 1 ORDER BY CoLugar ASC");
 
         const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('Reporte de Lugares');
+        const worksheet = workbook.addWorksheet('Reporte de Lugares de Acto');
 
-        // 1. LOGO
-        // const logoPath = path.join(__dirname, '../../../assets/img/logo.jpg');
-        // const logoId = workbook.addImage({
-        //     filename: logoPath,
-        //     extension: 'jpeg',
-        // });
+        // 1. LOGO (Ubicado a la izquierda)
+        const logoPath = path.join(__dirname, 'logo.png');
+        const logoId = workbook.addImage({
+            filename: logoPath,
+            extension: 'png',
+        });
         
-        // worksheet.addImage(logoId, {
-        //     tl: { col: 0.1, row: 0.5 },
-        //     ext: { width: 140, height: 50 }
-        // });
+        worksheet.addImage(logoId, {
+            tl: { col: 0.2, row: 1.2 },
+            ext: { width: 60, height: 40 },
+            editAs: 'onCell'
+        });
 
-        // 2. INFO EMPRESA
-        const infoCell = worksheet.getCell('D2');
-        infoCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
-        infoCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
-        infoCell.font = { name: 'Arial', size: 10 };
+        worksheet.getRow(2).height = 50;
 
-        // 3. TÍTULO CON LÍNEAS (Rango A a D)
+        // 2. INFO EMPRESA (Al lado del logo)
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        // 3. METADATOS (Fecha, Hora, Usuario a la derecha)
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        const metaCell = worksheet.getCell('D2');
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+        worksheet.getRow(2).height = 45; // Ajustar altura para que quepan las 3 líneas
+
+        // 4. TÍTULO CON LÍNEAS (Rango A a D)
         ['A', 'B', 'C', 'D'].forEach(col => {
             worksheet.getCell(`${col}5`).border = { bottom: { style: 'thin' } };
         });
@@ -185,7 +663,7 @@ exports.actPlacesExcel = async (req, res) => {
             worksheet.getCell(`${col}6`).border = { bottom: { style: 'thin' } };
         });
 
-        // 4. CABECERA DE TABLA (Fila 8)
+        // 5. CABECERA DE TABLA (Fila 8)
         const headerRowNumber = 8;
         worksheet.columns = [
             { key: 'codigo', width: 12 },
@@ -208,7 +686,7 @@ exports.actPlacesExcel = async (req, res) => {
             };
         });
 
-        // 5. DATOS
+        // 6. DATOS
         let currentRow = headerRowNumber + 1;
         lugares.forEach((lugar, index) => {
             const tipoLabel = lugar.MaTipoLugar == 1 ? 'Teatro Techado' : 'Salón / Otros';
@@ -230,21 +708,20 @@ exports.actPlacesExcel = async (req, res) => {
             currentRow++;
         });
 
-        // 6. CIERRE DE TABLA Y LÍNEA DE FOOTER (Sin casillas extra)
-        // Aplicar borde inferior a la última fila de datos
+        // 7. CIERRE DE TABLA Y LÍNEA DE FOOTER
         const lastDataRow = currentRow - 1;
         ['A', 'B', 'C', 'D'].forEach(col => {
-            const cell = worksheet.getCell(`${col} ${lastDataRow}`);
+            const cell = worksheet.getCell(`${col}${lastDataRow}`);
             cell.border = { ...cell.border, bottom: { style: 'thin' } };
         });
 
-        // LÍNEA DEL FOOTER: Solo una casilla después de la tabla
-        const lineSeparatorRow = currentRow; // currentRow ya es la fila vacía después de los datos
+        // Espacio de una fila y línea separadora
+        const lineSeparatorRow = currentRow + 1; 
         ['A', 'B', 'C', 'D'].forEach(col => {
             worksheet.getCell(`${col}${lineSeparatorRow}`).border = { bottom: { style: 'thin' } };
         });
 
-        // 7. TEXTO DEL FOOTER (Inmediatamente debajo de la línea)
+        // 8. TEXTO DEL FOOTER
         const footerStart = lineSeparatorRow + 1;
         worksheet.mergeCells(`A${footerStart}:D${footerStart}`);
         worksheet.mergeCells(`A${footerStart + 1}:D${footerStart + 1}`);
@@ -252,15 +729,15 @@ exports.actPlacesExcel = async (req, res) => {
         const f1 = worksheet.getCell(`A${footerStart}`);
         const f2 = worksheet.getCell(`A${footerStart + 1}`);
 
-        f1.value = "Para Mayor Información Visite www.gradosdevenezuela.com";
-        f2.value = "o escribanos a los correos info@gradosdevenezuela.com";
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
 
         [f1, f2].forEach(cell => {
             cell.alignment = { horizontal: 'center' };
             cell.font = { name: 'Arial', size: 10 };
         });
 
-        // 8. ENVÍO
+        // 9. ENVÍO
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename=reporte-lugares.xlsx');
 

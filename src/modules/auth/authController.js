@@ -1,3 +1,4 @@
+const nodemon = require('nodemon');
 const db = require('../../config/db');
 
 exports.login = async (req, res) => {
@@ -20,7 +21,8 @@ exports.login = async (req, res) => {
         res.json({ message: 'Login exitoso', user: {
             id: rows[0].CodUsuario,
             usuario: rows[0].Usuario,
-            maTipoUsr: rows[0].MaTipoUsr
+            maTipoUsr: rows[0].MaTipoUsr,
+            nombre: rows[0].Nombre
         } });
     } catch (error) {
         console.error('Error during login:', error);
