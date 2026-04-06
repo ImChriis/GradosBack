@@ -10,7 +10,7 @@ const banksRoutes = require('./src/modules/banks/banksRoutes');
 const actContractsRoutes = require('./src/modules/actContracts/actContractsRoutes');
 const metodoPagoRoutes = require('./src/modules/metodoPago/metodoPagoRoutes');
 const settingsRoutes = require('./src/modules/settings/settingsRoutes');
-const usersRoutes = require('./src/modules/users/usersRoutes');
+const reportsRoutes = require('./src/modules/reports/reportsRoutes');
 
 const app = express();
 
@@ -35,16 +35,15 @@ app.use('/banks', banksRoutes);
 app.use('/actContracts', actContractsRoutes);
 app.use('/metodoPago', metodoPagoRoutes);
 app.use('/settings', settingsRoutes);
-app.use('/users', usersRoutes);
-
+app.use('/reports', reportsRoutes);
 
 //Desarrollo
-// app.listen(3000, () => {
-//     console.log('Servidor escuchando en el puerto 3000, localhost:3000');
-// });
+app.listen(3000, () => {
+    console.log('Servidor escuchando en el puerto 3000, localhost:3000');
+});
 
 //Produccion
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Servidor escuchando en el puerto ${PORT}`);
-});
+// const PORT = process.env.PORT || 8080;
+// app.listen(PORT, "0.0.0.0", () => {
+//     console.log(`Servidor escuchando en el puerto ${PORT}`);
+// });
