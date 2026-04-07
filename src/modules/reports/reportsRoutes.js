@@ -8,5 +8,7 @@ router.get('/institutionsPdf/:usuarioReporte', reportsController.institutionsPdf
 router.get('/institutionsExcel/:usuarioReporte', reportsController.institutionsExcel);
 router.get('/actPlacesPdf/:usuarioReporte', reportsController.actPlacesPdf);
 router.get('/actPlacesExcel/:usuarioReporte', reportsController.actPlacesExcel);
+router.post('/clientsPdf', reportsController.clientsPdf);
+router.post('/clientsExcel', reportsController.clientsExcel);
 
 module.exports = router;

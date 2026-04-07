@@ -750,6 +750,312 @@ exports.actPlacesExcel = async (req, res) => {
     }
 };
 
-exports.getClientsPdf = async (req, res) => {
+exports.clientsPdf = async (req, res) => {
+    const { usuarioReporte, campos, fechaDesde } = req.body; 
     
-}
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 50, left: 50, right: 50 },
+        bufferPages: true 
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename=reporte-clientes.pdf');
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+
+    const labels = {
+        nucedula: "CÉDULA",
+        txnombre: "NOMBRE",
+        txdireccion: "DIRECCIÓN",
+        txtelefono: "TELÉFONO",
+        txcelular: "TELÉFONO",
+        txemail: "EMAIL"
+    };
+
+    const addHeader = (doc, logoPath, usuario) => {
+        try { doc.image(logoPath, 50, 35, { width: 65 }); } catch (e) {}
+        
+        doc.fontSize(9).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
+
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuario}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        doc.fontSize(12).font('Helvetica-Bold').text("Reporte de Clientes", 50, 95, { align: 'center' });
+        doc.moveTo(50, 120).lineTo(545, 115).lineWidth(0.5).stroke();
+    };
+
+    const drawTableHeader = (doc, y, selectedFields) => {
+        const totalWidth = 495;
+        const colWidth = totalWidth / selectedFields.length;
+        const headerHeight = 20;
+        
+        doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+        let headX = 50;
+        
+        selectedFields.forEach((field) => {
+            doc.rect(headX, y, colWidth, headerHeight).stroke();
+            doc.text(labels[field] || field.toUpperCase(), headX, y + 6, { width: colWidth, align: 'center' });
+            headX += colWidth;
+        });
+        return y + headerHeight;
+    };
+
+    addHeader(doc, logoPath, usuarioReporte);
+
+    try {
+        const query = `SELECT ${campos.join(', ')} FROM clientes WHERE feingreso >= ? ORDER BY feingreso DESC`;
+        const [rows] = await db.query(query, [fechaDesde]);
+
+        let currentY = 135; 
+        const totalWidth = 495;
+        const colWidth = totalWidth / campos.length;
+        
+        // Objeto para guardar en qué Y terminó cada página
+        const pageEndings = {};
+
+        currentY = drawTableHeader(doc, currentY, campos);
+        doc.font('Helvetica').fontSize(7);
+
+        rows.forEach((user, index) => {
+            if (index > 0 && index % 20 === 0) {
+                // Guardar la posición final antes de cambiar de página
+                pageEndings[doc.bufferedPageRange().count - 1] = currentY;
+
+                doc.addPage();
+                addHeader(doc, logoPath, usuarioReporte);
+                currentY = 135;
+                currentY = drawTableHeader(doc, currentY, campos);
+                doc.font('Helvetica').fontSize(7);
+            }
+
+            let maxRowHeight = 20; 
+            campos.forEach(field => {
+                const text = user[field]?.toString() || '';
+                const textHeight = doc.heightOfString(text, { width: colWidth - 6 });
+                if (textHeight + 10 > maxRowHeight) maxRowHeight = textHeight + 10;
+            });
+
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, currentY, 495, maxRowHeight).fill();
+            }
+
+            doc.fillColor('#000000');
+            let rX = 50;
+            campos.forEach((field) => {
+                const textValue = user[field]?.toString() || '';
+                doc.rect(rX, currentY, colWidth, maxRowHeight).stroke();
+                doc.text(textValue, rX + 3, currentY + 5, { width: colWidth - 6, align: 'left' });
+                rX += colWidth;
+            });
+
+            currentY += maxRowHeight;
+        });
+
+        // Guardar la posición de la última página
+        pageEndings[doc.bufferedPageRange().count - 1] = currentY;
+
+        // --- ESTAMPADO DE FOOTER ADAPTATIVO ---
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            
+            // Usamos la posición guardada para esa página + 15 de margen
+            let footerBaseY = (pageEndings[i] || currentY) + 15;
+            
+            // Seguridad: Si la tabla es muy larga, no dejar que el footer baje de 730
+            if (footerBaseY > 730) footerBaseY = 730;
+
+            // Línea de cierre (siempre a la misma distancia de la tabla)
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            
+            doc.fontSize(9).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { align: 'center', width: 495 });
+
+            // La numeración sí la dejamos fija al fondo para que no se mueva de lugar entre páginas
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, 780, { align: 'right', width: 495 });
+        }
+
+    } catch (err) {
+        console.error(err);
+    }
+    doc.end();
+};
+
+exports.clientsExcel = async (req, res) => {
+    try {
+        const { usuarioReporte, campos, fechaDesde } = req.body;
+
+        // Query dinámico según la selección del usuario
+        const query = `SELECT ${campos.join(', ')} FROM clientes WHERE feingreso >= ? ORDER BY feingreso DESC`;
+        const [rows] = await db.query(query, [fechaDesde]);
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Reporte de Clientes');
+
+        const labels = {
+            nucedula: "CÉDULA",
+            txnombre: "NOMBRE",
+            txdireccion: "DIRECCIÓN",
+            txtelefono: "TELÉFONO",
+            txcelular: "CELULAR",
+            txemail: "EMAIL"
+        };
+
+        // Determinamos la última columna según la cantidad de campos (A, B, C...)
+        const lastColChar = String.fromCharCode(64 + campos.length);
+
+        // 1. LOGO
+        const logoPath = path.join(__dirname, 'logo.png');
+        try {
+            const logoId = workbook.addImage({
+                filename: logoPath,
+                extension: 'png',
+            });
+            worksheet.addImage(logoId, {
+                tl: { col: 0.2, row: 1.2 },
+                ext: { width: 60, height: 40 },
+                editAs: 'onCell'
+            });
+        } catch (e) {}
+
+        worksheet.getRow(2).height = 50;
+
+        // 2. INFO EMPRESA
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        // 3. METADATOS (A la derecha en la última columna seleccionada)
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        const metaCell = worksheet.getCell(`${lastColChar}2`);
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        // 4. TÍTULO CON LÍNEAS SUPERIOR E INFERIOR (Rango dinámico)
+        // Línea superior (Fila 5)
+        for (let i = 1; i <= campos.length; i++) {
+            const col = String.fromCharCode(64 + i);
+            worksheet.getCell(`${col}5`).border = { bottom: { style: 'thin' } };
+        }
+
+        worksheet.mergeCells(`A6:${lastColChar}6`);
+        const titleCell = worksheet.getCell('A6');
+        titleCell.value = "Reporte de Clientes";
+        titleCell.font = { name: 'Arial', bold: true, size: 13 };
+        titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+        // Línea inferior del título (Fila 6)
+        for (let i = 1; i <= campos.length; i++) {
+            const col = String.fromCharCode(64 + i);
+            worksheet.getCell(`${col}6`).border = { bottom: { style: 'thin' } };
+        }
+
+        // 5. CONFIGURACIÓN DE COLUMNAS
+        const headerRowNumber = 8;
+        worksheet.columns = campos.map(field => ({
+            key: field,
+            width: (field === 'txdireccion' || field === 'txemail' || field === 'txnombre') ? 40 : 15
+        }));
+
+        // 6. CABECERA DE TABLA
+        const headerRow = worksheet.getRow(headerRowNumber);
+        headerRow.values = campos.map(f => labels[f] || f.toUpperCase());
+        
+        headerRow.eachCell((cell) => {
+            cell.font = { bold: true, size: 10 };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+            };
+        });
+
+        // 7. DATOS
+        let currentRow = headerRowNumber + 1;
+        rows.forEach((user, index) => {
+            const rowValues = campos.map(f => user[f] || '');
+            const row = worksheet.addRow(rowValues);
+
+            const esPar = (index + 1) % 2 === 0;
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
+                // Ajuste de texto para que las líneas crezcan
+                cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+                
+                if (esPar) {
+                    cell.fill = { 
+                        type: 'pattern', 
+                        pattern: 'solid', 
+                        fgColor: { argb: 'FFFFFFE0' } // Amarillo suave para pares
+                    };
+                }
+            });
+            currentRow++;
+        });
+
+        // 8. CIERRE DE TABLA Y LÍNEA DE FOOTER
+        const lastDataRow = currentRow - 1;
+        for (let i = 1; i <= campos.length; i++) {
+            const col = String.fromCharCode(64 + i);
+            const cell = worksheet.getCell(`${col}${lastDataRow}`);
+            cell.border = { ...cell.border, bottom: { style: 'thin' } };
+        }
+
+        // Línea separadora antes del footer
+        const lineSeparatorRow = currentRow + 1; 
+        for (let i = 1; i <= campos.length; i++) {
+            const col = String.fromCharCode(64 + i);
+            worksheet.getCell(`${col}${lineSeparatorRow}`).border = { bottom: { style: 'thin' } };
+        }
+
+        // 9. TEXTO DEL FOOTER
+        const footerStart = lineSeparatorRow + 1;
+        worksheet.mergeCells(`A${footerStart}:${lastColChar}${footerStart}`);
+        worksheet.mergeCells(`A${footerStart + 1}:${lastColChar}${footerStart + 1}`);
+
+        const f1 = worksheet.getCell(`A${footerStart}`);
+        const f2 = worksheet.getCell(`A${footerStart + 1}`);
+
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+
+        [f1, f2].forEach(cell => {
+            cell.alignment = { horizontal: 'center' };
+            cell.font = { name: 'Arial', size: 10 };
+        });
+
+        // 10. ENVÍO
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=reporte-clientes.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (error) {
+        console.error(error);
+        if (!res.headersSent) res.status(500).send("Error al generar Excel");
+    }
+};
