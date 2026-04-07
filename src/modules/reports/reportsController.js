@@ -749,3 +749,7 @@ exports.actPlacesExcel = async (req, res) => {
         if (!res.headersSent) res.status(500).send("Error al generar Excel");
     }
 };
+
+exports.getClientsPdf = async (req, res) => {
+    
+}
