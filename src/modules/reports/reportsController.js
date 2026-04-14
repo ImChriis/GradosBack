@@ -1059,3 +1059,148 @@ exports.clientsExcel = async (req, res) => {
         if (!res.headersSent) res.status(500).send("Error al generar Excel");
     }
 };
+
+exports.actListPdf = async (req, res) => {
+    // Extraemos los parámetros de la petición (desde body como indicaste)
+    const { usuarioReporte, CodigoActo } = req.body;
+
+    try {
+        // 1. Obtener Nombre de la tabla dinámica y Título del acto
+        const [tablaRes] = await db.query("SELECT Nombre FROM deactosgrados WHERE CodigoActo = ?", [CodigoActo]);
+        const [tituloRes] = await db.query("SELECT Titulo FROM actosgrados WHERE CodigoActo = ?", [CodigoActo]);
+
+        // Validación de existencia de datos
+        if (tablaRes.length === 0 || tituloRes.length === 0) {
+            return res.status(404).json({ 
+                error: "No encontrado", 
+                message: `El Código de Acto ${CodigoActo} no existe en las tablas maestras.` 
+            });
+        }
+
+        const nombreTablaDinamica = tablaRes[0].Nombre;
+        const tituloActo = tituloRes[0].Titulo;
+
+        // 2. Inicializar el documento PDF
+        const doc = new PDFDocument({
+            size: 'A4',
+            margins: { top: 40, bottom: 20, left: 50, right: 50 },
+            bufferPages: true 
+        });
+
+        // Configurar cabeceras de respuesta
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=listado-acto-${CodigoActo}.pdf`);
+        doc.pipe(res);
+
+        const logoPath = path.join(__dirname, 'logo.png');
+
+        // Función interna para el encabezado con el nuevo formato de título
+        const addHeader = (doc, logoPath, usuario, titulo, codigo) => {
+            try {
+                doc.image(logoPath, 50, 35, { width: 65 });
+            } catch (error) {
+                console.log("Aviso: Logo no encontrado.");
+            }
+
+            doc.fontSize(9).font('Helvetica-Bold')
+                .text("Grado`s de Venezuela, C.A.", 130, 40)
+                .font('Helvetica').text("J-30591547-4", 130, 52);
+
+            const fechaActual = new Date().toLocaleDateString('es-VE');
+            const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+            doc.fontSize(8).font('Helvetica')
+                .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+                .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+                .text(`Usuario: ${usuario}`, 350, 60, { align: 'right' });
+
+            doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+            
+            // TÍTULO SOLICITADO: Lista de graduandos - Codigo - Nombre Acto
+            const fullTitle = `LISTA DE GRADUANDOS - ${codigo} - ${titulo || ''}`;
+            doc.fontSize(10).font('Helvetica-Bold').text(fullTitle.toUpperCase(), 50, 95, { align: 'center' });
+            
+            doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+        };
+
+        const drawTableHeader = (doc, y) => {
+            // Un solo ancho de columna (495 es el total entre márgenes)
+            const colWidth = 495;
+            const rowHeight = 20;
+            doc.fillColor('#000000').fontSize(9).font('Helvetica-Bold');
+            
+            doc.rect(50, y, colWidth, rowHeight).stroke();
+            doc.text("NOMBRE DEL GRADUANDO", 50, y + 5, { width: colWidth, align: 'center' });
+            
+            return y + rowHeight;
+        };
+
+        // 3. Consultar la tabla dinámica (He corregido el FROM para usar la variable dinámica)
+        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados ORDER BY Nombre ASC`);
+
+        addHeader(doc, logoPath, usuarioReporte, tituloActo, CodigoActo);
+
+        let currentY = 130; 
+        const rowHeight = 20;
+        const tableWidth = 495;
+
+        currentY = drawTableHeader(doc, currentY);
+        doc.font('Helvetica').fontSize(9); // Subimos un poco el tamaño al ser solo una columna
+
+        graduandos.forEach((item, index) => {
+            // Salto de página
+            if (index > 0 && index % 25 === 0) {
+                doc.addPage();
+                addHeader(doc, logoPath, usuarioReporte, tituloActo, CodigoActo);
+                currentY = 130;
+                currentY = drawTableHeader(doc, currentY);
+                doc.font('Helvetica').fontSize(9);
+            }
+
+            // Fondo cebra
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, currentY, tableWidth, rowHeight).fill();
+            }
+
+            doc.fillColor('#000000');
+            // Dibujar celda única del nombre
+            doc.rect(50, currentY, tableWidth, rowHeight).stroke();
+            doc.text(item.Nombre?.toString().toUpperCase() || '', 60, currentY + 6, { 
+                width: tableWidth - 10, 
+                align: 'left',
+                lineBreak: false 
+            });
+            
+            currentY += rowHeight;
+        });
+
+        // --- FILA DE TOTAL ---
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
+        doc.rect(50, currentY, tableWidth, rowHeight).stroke();
+        doc.text(`TOTAL GRADUANDOS EN ESTE ACTO: ${graduandos.length}`, 50, currentY + 6, { 
+            width: tableWidth, 
+            align: 'center' 
+        });
+
+        // 4. Footer
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            const footerBaseY = 750; 
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            doc.fontSize(9).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { align: 'center', width: 495 });
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, 785, { align: 'right', width: 495 });
+        }
+
+        doc.end();
+
+    } catch (err) {
+        console.error("Error al generar el reporte:", err);
+        if (!res.headersSent) {
+            res.status(500).send("Error interno al procesar el listado.");
+        }
+    }
+};
