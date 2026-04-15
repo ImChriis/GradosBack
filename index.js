@@ -12,6 +12,7 @@ const metodoPagoRoutes = require('./src/modules/metodoPago/metodoPagoRoutes');
 const settingsRoutes = require('./src/modules/settings/settingsRoutes');
 const usersRoutes = require('./src/modules/users/usersRoutes');
 const reportsRoutes = require('./src/modules/reports/reportsRoutes');
+const backupRoutes = require('./src/modules/backup/backupRoutes');
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use('/metodoPago', metodoPagoRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/users', usersRoutes);
 app.use('/reports', reportsRoutes);
+app.use('/backup', backupRoutes);
 
 //Desarrollo
 app.listen(3000, () => {

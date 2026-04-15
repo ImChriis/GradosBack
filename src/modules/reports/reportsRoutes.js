@@ -11,5 +11,7 @@ router.get('/actPlacesExcel/:usuarioReporte', reportsController.actPlacesExcel);
 router.post('/clientsPdf', reportsController.clientsPdf);
 router.post('/clientsExcel', reportsController.clientsExcel);
 router.post('/actListPdf', reportsController.actListPdf);
+router.post('/actListExcel', reportsController.actListExcel);
+router.post('/actListTxt', reportsController.actListTxt);
 
 module.exports = router;

@@ -107,8 +107,7 @@ exports.specialitiesPdf = async (req, res) => {
         for (let i = range.start; i < (range.start + range.count); i++) {
             doc.switchToPage(i);
             const isLastPage = (i === (range.start + range.count - 1));
-            let footerBaseY = isLastPage ? Math.min(currentY + 15, 610) : 610; 
-
+            const footerBaseY = 750; 
             doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
             doc.fontSize(9).font('Helvetica').fillColor('#000000');
             doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
@@ -321,10 +320,7 @@ exports.institutionsPdf = async (req, res) => {
         for (let i = range.start; i < (range.start + range.count); i++) {
             doc.switchToPage(i);
             
-            // Definimos la base del footer bien abajo (A4 tiene ~841 de alto)
-            const footerBaseY = 610; 
-
-            // 1. Línea negra
+            const footerBaseY = 750; 
             doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
             
             // 2. Texto centrado (Dos líneas)
@@ -340,7 +336,7 @@ exports.institutionsPdf = async (req, res) => {
 
             // 3. Numeración abajo a la derecha (independiente)
             doc.fontSize(8).font('Helvetica-Bold')
-                .text(`Página ${i + 1} / ${range.count}`, 50, footerBaseY + 200, { 
+                .text(`Página ${i + 1} / ${range.count}`, 50, footerBaseY + 40, { 
                     align: 'right', 
                     width: 495 
                 });
@@ -572,16 +568,9 @@ exports.actPlacesPdf = async (req, res) => {
         for (let i = range.start; i < (range.start + range.count); i++) {
             doc.switchToPage(i);
             
-            // Si es la última página, lo pega a la tabla. Si no, lo deja abajo.
-            const isLastPage = (i === (range.start + range.count - 1));
-            let footerBaseY = isLastPage ? currentY + 15 : 750;
-
-            // Limite de seguridad para que no se salga de la hoja si la tabla es muy larga
-            if (footerBaseY > 760) footerBaseY = 760;
-
-            // 1. Línea negra
+    
+            const footerBaseY = 750; 
             doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
-            
             // 2. Texto centrado
             doc.fontSize(9).font('Helvetica').fillColor('#000000');
             doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { 
@@ -868,23 +857,16 @@ exports.clientsPdf = async (req, res) => {
         const range = doc.bufferedPageRange();
         for (let i = range.start; i < (range.start + range.count); i++) {
             doc.switchToPage(i);
-            
-            // Usamos la posición guardada para esa página + 15 de margen
-            let footerBaseY = (pageEndings[i] || currentY) + 15;
-            
-            // Seguridad: Si la tabla es muy larga, no dejar que el footer baje de 730
-            if (footerBaseY > 730) footerBaseY = 730;
-
-            // Línea de cierre (siempre a la misma distancia de la tabla)
+    
+            const footerBaseY = 750; 
             doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
-            
             doc.fontSize(9).font('Helvetica').fillColor('#000000');
             doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
             doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { align: 'center', width: 495 });
 
             // La numeración sí la dejamos fija al fondo para que no se mueva de lugar entre páginas
             doc.fontSize(8).font('Helvetica-Bold')
-                .text(`Página ${i + 1} / ${range.count}`, 50, 780, { align: 'right', width: 495 });
+                .text(`Página ${i + 1} / ${range.count}`, 50, 785, { align: 'right', width: 495 });
         }
 
     } catch (err) {
@@ -1201,6 +1183,233 @@ exports.actListPdf = async (req, res) => {
         console.error("Error al generar el reporte:", err);
         if (!res.headersSent) {
             res.status(500).send("Error interno al procesar el listado.");
+        }
+    }
+};
+
+exports.actListExcel = async (req, res) => {
+    const { usuarioReporte, CodigoActo } = req.body;
+
+    try {
+        const [tablaRes] = await db.query("SELECT Nombre FROM deactosgrados WHERE CodigoActo = ?", [CodigoActo]);
+        const [tituloRes] = await db.query("SELECT Titulo FROM actosgrados WHERE CodigoActo = ?", [CodigoActo]);
+
+        if (tablaRes.length === 0 || tituloRes.length === 0) {
+            return res.status(404).json({ 
+                error: "No encontrado", 
+                message: `El Código de Acto ${CodigoActo} no existe.` 
+            });
+        }
+
+        const nombreTablaDinamica = tablaRes[0].Nombre;
+        const tituloActo = tituloRes[0].Titulo;
+        const fullTitle = `LISTA DE GRADUANDOS - ${CodigoActo} - ${tituloActo || ''}`.toUpperCase();
+
+        // FIX: Usar la tabla dinámica correcta
+        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados ORDER BY Nombre ASC`);
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Lista de Graduandos');
+
+        worksheet.columns = [
+            { key: 'c1', width: 15 }, // Un poco más ancha para el logo
+            { key: 'c2', width: 25 },
+            { key: 'c3', width: 25 },
+            { key: 'c4', width: 25 },
+            { key: 'c5', width: 12 },
+        ];
+
+        // Altura de la fila del encabezado
+        worksheet.getRow(2).height = 60; 
+
+        // 3. LOGO CENTRADO
+        const logoPath = path.join(__dirname, 'logo.png');
+        try {
+            const logoId = workbook.addImage({
+                filename: logoPath,
+                extension: 'png',
+            });
+            
+            worksheet.addImage(logoId, {
+                tl: { col: 0, row: 1 }, // Celda A2 (index 0, row 1)
+                ext: { width: 70, height: 50 },
+                editAs: 'oneCell',
+                // Ajuste de posición interna para centrar
+                nativeColOff: 200000, // Desplazamiento horizontal
+                nativeRowOff: 100000  // Desplazamiento vertical
+            });
+        } catch (e) {
+            console.log("Aviso: Logo no encontrado.");
+        }
+
+        // 4. INFO EMPRESA (Izquierda)
+        worksheet.mergeCells('B2:C2');
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        // 5. METADATOS (Derecha)
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        
+        worksheet.mergeCells('D2:E2');
+        const metaCell = worksheet.getCell('D2');
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        // 6. DISEÑO DE TÍTULO
+        for (let i = 1; i <= 5; i++) {
+            worksheet.getRow(5).getCell(i).border = { bottom: { style: 'thin' } };
+        }
+
+        worksheet.mergeCells('A6:E6');
+        const titleCell = worksheet.getCell('A6');
+        titleCell.value = fullTitle;
+        titleCell.font = { name: 'Arial', bold: true, size: 11 };
+        titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+        titleCell.border = { bottom: { style: 'thin' } };
+
+        // 7. CABECERA DE TABLA
+        const headerRowNumber = 8;
+        worksheet.mergeCells(`A${headerRowNumber}:E${headerRowNumber}`);
+        const tableHeader = worksheet.getCell(`A${headerRowNumber}`);
+        tableHeader.value = "NOMBRE DEL GRADUANDO";
+        tableHeader.font = { bold: true, size: 10, color: { argb: '000000' } };
+        tableHeader.fill = { 
+            type: 'pattern', 
+            pattern: 'solid', 
+            fgColor: { argb: 'FFFFFF' } // Fondo blanco
+        };
+        tableHeader.alignment = { horizontal: 'center', vertical: 'middle' };
+        tableHeader.border = {
+            top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' }
+        };
+
+        // 8. LISTADO DE DATOS
+        let currentRow = headerRowNumber + 1;
+        graduandos.forEach((item, index) => {
+            worksheet.mergeCells(`A${currentRow}:E${currentRow}`);
+            const cell = worksheet.getCell(`A${currentRow}`);
+            cell.value = item.Nombre?.toString().toUpperCase() || '';
+            
+            cell.border = {
+                top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' }
+            };
+            cell.alignment = { vertical: 'middle', horizontal: 'left', indent: 2 };
+
+            if ((index + 1) % 2 === 0) {
+                cell.fill = { 
+                    type: 'pattern', 
+                    pattern: 'solid', 
+                    fgColor: { argb: 'FFFFE0' } 
+                };
+            }
+            currentRow++;
+        });
+
+        // 9. FILA DE TOTAL
+        worksheet.mergeCells(`A${currentRow}:E${currentRow}`);
+        const totalCell = worksheet.getCell(`A${currentRow}`);
+        totalCell.value = `TOTAL GRADUANDOS EN ESTE ACTO: ${graduandos.length}`;
+        totalCell.font = { bold: true, size: 10 };
+        totalCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        totalCell.border = {
+            top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' }
+        };
+
+        // --- LÍNEA SEPARADORA ANTES DEL FOOTER ---
+        const lineSeparatorRow = currentRow + 2; 
+        for (let i = 1; i <= 5; i++) {
+            const col = String.fromCharCode(64 + i);
+            worksheet.getCell(`${col}${lineSeparatorRow}`).border = { 
+                bottom: { style: 'thin' } 
+            };
+        }
+
+        // 10. TEXTO DEL FOOTER
+        const footerStart = lineSeparatorRow + 1;
+        worksheet.mergeCells(`A${footerStart}:E${footerStart}`);
+        worksheet.mergeCells(`A${footerStart + 1}:E${footerStart + 1}`);
+        
+        const f1 = worksheet.getCell(`A${footerStart}`);
+        const f2 = worksheet.getCell(`A${footerStart + 1}`);
+
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+
+        [f1, f2].forEach(cell => {
+            cell.alignment = { horizontal: 'center' };
+            cell.font = { name: 'Arial', size: 9, italic: true };
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=listado-acto-${CodigoActo}.xlsx`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (error) {
+        console.error("Error al generar Excel:", error);
+        if (!res.headersSent) {
+            res.status(500).send("Error interno al generar el reporte Excel.");
+        }
+    }
+};
+
+exports.actListTxt = async (req, res) => {
+    const { CodigoActo } = req.body;
+
+    try {
+        // 1. Obtener metadatos del acto
+        const [tablaRes] = await db.query("SELECT Nombre FROM deactosgrados WHERE CodigoActo = ?", [CodigoActo]);
+        const [tituloRes] = await db.query("SELECT Titulo FROM actosgrados WHERE CodigoActo = ?", [CodigoActo]);
+
+        if (tablaRes.length === 0 || tituloRes.length === 0) {
+            return res.status(404).json({ error: "No encontrado" });
+        }
+
+        const nombreTablaDinamica = tablaRes[0].Nombre;
+        const tituloActo = tituloRes[0].Titulo;
+        
+        // 2. Obtener graduandos
+        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados ORDER BY Nombre ASC`);
+
+        // 3. Construir el contenido siguiendo el formato exacto
+        let content = "";
+        const separator = "=".repeat(51); // Longitud ajustada a tu ejemplo
+
+        // Encabezado con etiquetas específicas
+        content += `Código Acto de Grado No: ${CodigoActo}\n`;
+        content += `Nombre Acto de Grado: ${tituloActo?.toUpperCase()}\n`;
+        
+        // Bloque de título centrado
+        content += `${separator}\n`;
+        content += `==========     LISTADO DE GRADUANDOS     ==========\n`;
+        content += `${separator}\n`;
+
+        // Listado de nombres (sin números, tal como el ejemplo)
+        graduandos.forEach((item) => {
+            const nombre = item.Nombre?.toString().toUpperCase() || '';
+            content += `${nombre}\n`;
+        });
+
+        // Cierre y Total
+        content += `${separator}\n`;
+        content += `TOTAL GRADUANDOS: ${graduandos.length}`;
+
+        // 4. Configurar headers y enviar el archivo
+        // Usamos 'latin1' o 'utf-8'. Para Notepad en Windows suele ser mejor utf-8 con BOM o latin1
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename=listado-acto-${CodigoActo}.txt`);
+        
+        return res.send(content);
+
+    } catch (error) {
+        console.error("Error al generar TXT:", error);
+        if (!res.headersSent) {
+            res.status(500).send("Error interno al generar el reporte TXT.");
         }
     }
 };
