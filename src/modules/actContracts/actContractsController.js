@@ -2,7 +2,7 @@ const db = require('../../config/db');
 
 exports.getActs = async (req, res) => {
     try{
-        const sql = 'SELECT ag.CodigoActo, ag.Fecha, ag.Hora, ag.siglas, ag.especialidad, ag.titulo, la.TxLugar, i.CodigoInst, i.nbInstitucion FROM actosgrados AS ag INNER JOIN lugaracto AS la On ag.CoLugar = la.CoLugar INNER JOIN instituciones as i ON ag.CodigoInst = i.CodigoInst WHERE ag.Culminada = "0" ORDER BY ag.CodigoActo DESC';
+        const sql = 'SELECT ag.CodigoActo, ag.Fecha, ag.Hora, ag.siglas, ag.especialidad, ag.titulo, ag.MnCosto, la.TxLugar, i.CodigoInst, i.nbInstitucion FROM actosgrados AS ag INNER JOIN lugaracto AS la On ag.CoLugar = la.CoLugar INNER JOIN instituciones as i ON ag.CodigoInst = i.CodigoInst WHERE ag.Culminada = "0" ORDER BY ag.CodigoActo DESC';
         const [rows] = await db.query(sql);
         res.json(rows);
     } catch (error){
@@ -19,6 +19,19 @@ exports.getActsUsersByCodigoActo = async (req, res) => {
         res.json(rows);
     }catch (error){
         console.error('Error fetching acts users:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+}
+
+exports.createAct = async(req, res) => {
+    const { CodigoActo, Fecha, Hora, Siglas, Titulo, CoLugar, MnMonto, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
+
+    try{
+        const sql = `INSERT INTO ActosGrados (CodigoActo, Fecha, Hora, Siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        await db.query(sql, [CodigoActo, Fecha, Hora, Siglas, Titulo, CoLugar, MnMonto, Especialidad, CodUser, Culminada, CodigoInst]);
+        res.status(201).json({ message: "Acto creado exitosamente" });
+    } catch (error) {
+        console.error('Error creating act:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 }
