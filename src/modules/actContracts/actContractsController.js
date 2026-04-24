@@ -24,11 +24,16 @@ exports.getActsUsersByCodigoActo = async (req, res) => {
 }
 
 exports.createAct = async(req, res) => {
-    const { CodigoActo, Fecha, Hora, Siglas, Titulo, CoLugar, MnMonto, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
+    const { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
 
     try{
-        const sql = `INSERT INTO ActosGrados (CodigoActo, Fecha, Hora, Siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        await db.query(sql, [CodigoActo, Fecha, Hora, Siglas, Titulo, CoLugar, MnMonto, Especialidad, CodUser, Culminada, CodigoInst]);
+        console.log(req.body);
+        const sql = `INSERT INTO ActosGrados (CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        await db.query(sql, [CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst]);
+
+        const sql2 = 'UPDATE configuracion SET NoActo = ?';
+        await db.execute(sql2, [CodigoActo]);
+        
         res.status(201).json({ message: "Acto creado exitosamente" });
     } catch (error) {
         console.error('Error creating act:', error);
