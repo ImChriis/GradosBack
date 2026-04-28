@@ -2,7 +2,15 @@ const db = require('../../config/db');
 
 exports.getActs = async (req, res) => {
     try{
-        const sql = 'SELECT ag.CodigoActo, ag.Fecha, ag.Hora, ag.siglas, ag.especialidad, ag.titulo, ag.MnCosto, la.TxLugar, i.CodigoInst, i.nbInstitucion FROM actosgrados AS ag INNER JOIN lugaracto AS la On ag.CoLugar = la.CoLugar INNER JOIN instituciones as i ON ag.CodigoInst = i.CodigoInst WHERE ag.Culminada = "0" ORDER BY ag.CodigoActo DESC';
+       const sql = `
+            SELECT 
+                ag.CodigoActo, ag.Fecha, ag.Hora, ag.siglas, ag.especialidad, 
+                ag.titulo, ag.MnCosto, la.TxLugar, i.CodigoInst, i.nbInstitucion 
+            FROM actosgrados AS ag 
+            LEFT JOIN lugaracto AS la ON ag.CoLugar = la.CoLugar 
+            LEFT JOIN instituciones AS i ON ag.CodigoInst = i.CodigoInst 
+            WHERE ag.Culminada = 0 
+            ORDER BY ag.CodigoActo DESC`;   
         const [rows] = await db.query(sql);
         res.json(rows);
     } catch (error){
