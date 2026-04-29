@@ -15,6 +15,7 @@ router.post('/recalculateTotal', actContractsController.recalculateActTotal);
 router.post('/addUser', actContractsController.addUserToAct);
 router.post ('/createRecibo', actContractsController.createReciboPago);
 router.post('/createAct', actContractsController.createAct);
+router.put('/updateAct/:codigoActo', actContractsController.updateAct);
 // router.post('/add', actContractsController.addActContract);
 // router.put('/update/:CoContrato', actContractsController.updateActContract);
 

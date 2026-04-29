@@ -35,7 +35,7 @@ exports.createAct = async(req, res) => {
     const { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
 
     try{
-        console.log(req.body);
+        // console.log(req.body);
         const sql = `INSERT INTO ActosGrados (CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         await db.query(sql, [CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst]);
 
@@ -45,6 +45,20 @@ exports.createAct = async(req, res) => {
         res.status(201).json({ message: "Acto creado exitosamente" });
     } catch (error) {
         console.error('Error creating act:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+}
+
+exports.updateAct = async (req, res) => {
+    const { codigoActo } = req.params;
+    const { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
+
+    try{
+        const sql = `UPDATE ActosGrados SET CodigoActo = ?, Fecha = ?, Hora = ?, siglas = ?, Titulo = ?, CoLugar = ?, Especialidad = ?, CodUser = ?, Culminada = ?, CodigoInst = ? WHERE CodigoActo = ?`;
+        await db.query(sql, [CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, Especialidad, CodUser, Culminada, CodigoInst, codigoActo]);
+        res.status(201).json({ message: "Acto actualizado exitosamente" });
+    } catch (error) {
+        console.error('Error updating act:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 }
@@ -67,40 +81,56 @@ exports.getActTotal = async (req, res) => {
 }
 
 exports.recalculateActTotal = async (req, res) => {
-    const { nuevoMonto, codigoActo } = req.body;
-    const connection = await db.getConnection(); // Obtener conexión del pool
+   const { codigoActo, nuevoMonto } = req.body;
+
+    if (!codigoActo || nuevoMonto === undefined) {
+        return res.status(400).json({ message: "Datos incompletos para el recalculo" });
+    }
+
+    // Iniciamos la conexión desde el pool
+    const connection = await db.getConnection();
 
     try {
-        await connection.beginTransaction(); // Iniciamos transacción
+        // 1. Iniciar Transacción
+        await connection.beginTransaction();
 
-        // 1. Actualizar costo base en ActosGrados
-        await connection.query(
+        // 2. Actualizar tabla maestra de Actos
+        await connection.execute(
             "UPDATE ActosGrados SET MnCosto = ? WHERE CodigoActo = ?",
             [nuevoMonto, codigoActo]
         );
 
-        // 2. Actualizar totales y saldos de los estudiantes
-        // Nota: En MariaDB/MySQL no hace falta poner [dbo]
-        await connection.query(
-            "UPDATE DeActosGrados SET MnContrato = ?, MnSaldo = ? - MnPagado WHERE CodigoActo = ?",
+        // 3. Actualizar detalle de graduandos (Ajustando saldos según lo pagado)
+        // Lógica: NuevoSaldo = NuevoMonto - LoYaPagado
+        await connection.execute(
+            `UPDATE DeActosGrados 
+             SET MnTotal = ?, 
+                 MnSaldo = ? - MnPagado 
+             WHERE CodigoActo = ?`,
             [nuevoMonto, nuevoMonto, codigoActo]
         );
 
-        // 3. Actualizar saldos en recibos
-        await connection.query(
-            "UPDATE ReciboPago SET MnSaldoRec = ? - MnRecibo WHERE CodigoActo = ?",
+        // 4. Actualizar saldos en recibos de pago
+        await connection.execute(
+            `UPDATE ReciboPago 
+             SET MnSaldoRec = ? - MnRecibo 
+             WHERE CodigoActo = ?`,
             [nuevoMonto, codigoActo]
         );
 
-        await connection.commit(); // Si todo salió bien, guardamos cambios
-        res.json({ message: "Proceso Finalizado con éxito" });
+        // 5. Si todo salió bien, confirmar cambios
+        await connection.commit();
+
+        res.json({ message: "Proceso de recalculo finalizado con éxito" });
 
     } catch (error) {
-        await connection.rollback(); // Si algo falló, deshacemos todo
-        console.error("Error al recalcular:", error);
-        res.status(500).send("Error al procesar el recálculo");
+        // Si algo falla, revertimos todos los cambios para no dejar data inconsistente
+        await connection.rollback();
+        console.error("Error en recalculo:", error);
+        res.status(500).json({ message: "Error al recalcular montos" });
     } finally {
-        connection.release(); // Liberamos la conexión
+        // Liberar la conexión al pool
+        connection.release();
     }
 }
 
