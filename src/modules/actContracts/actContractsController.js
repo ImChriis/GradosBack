@@ -104,7 +104,7 @@ exports.recalculateActTotal = async (req, res) => {
         // Lógica: NuevoSaldo = NuevoMonto - LoYaPagado
         await connection.execute(
             `UPDATE DeActosGrados 
-             SET MnTotal = ?, 
+             SET MnContrato = ?, 
                  MnSaldo = ? - MnPagado 
              WHERE CodigoActo = ?`,
             [nuevoMonto, nuevoMonto, codigoActo]
