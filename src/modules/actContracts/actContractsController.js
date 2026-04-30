@@ -4,7 +4,7 @@ exports.getActs = async (req, res) => {
     try{
        const sql = `
             SELECT 
-                ag.CodigoActo, ag.Fecha, ag.Hora, ag.siglas, ag.especialidad, 
+                ag.CodigoActo, ag.CoLugar, ag.Fecha, ag.Hora, ag.siglas, ag.especialidad, 
                 ag.titulo, ag.MnCosto, la.TxLugar, i.CodigoInst, i.nbInstitucion 
             FROM actosgrados AS ag 
             LEFT JOIN lugaracto AS la ON ag.CoLugar = la.CoLugar 
