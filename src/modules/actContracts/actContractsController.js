@@ -401,3 +401,49 @@ exports.createReciboPago = async (req, res) => {
         });
     }
 };
+
+exports.createDeposito = async (req, res) => {
+    const { NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal } = req.body;
+
+    try {
+        const sql = `
+            INSERT INTO Depositos (
+                NoContrato, 
+                NuCedula, 
+                NoRecibo, 
+                Fecha, 
+                TipoOperacion, 
+                TxBanco, 
+                NuDeposito, 
+                MnDeposito, 
+                CodUser, 
+                CodSucursal
+            ) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        const [rows] = await db.query(sql, [
+            NoContrato, 
+            NuCedula, 
+            NoRecibo, 
+            Fecha, 
+            TipoOperacion, 
+            TxBanco, 
+            NuDeposito, 
+            MnDeposito, 
+            CodUser, 
+            CodSucursal
+        ]);
+        res.status(201).json({ 
+            status: 'success', 
+            message: 'Depósito registrado correctamente',
+            affectedRows: rows.affectedRows 
+        });
+    } catch (error) {
+        console.error("Error al registrar el depósito:", error);
+        res.status(500).json({ 
+            status: 'error',
+            message: "Internal Server Error",
+            details: error.message 
+        });
+    }
+}
