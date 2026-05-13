@@ -304,7 +304,7 @@ exports.getRecibosByUserContract = async (req, res) => {
             })
         }
 
-        res.json({ status: 'success', data: rows });
+        res.json(rows);
     } catch (error){
         console.error("Error fetching recibos:", error);
         res.status(500).json({ error: "Error interno del servidor" });
@@ -367,7 +367,7 @@ exports.createReciboPago = async (req, res) => {
         
         // Pasamos los valores en el orden exacto de los '?'
         const [result] = await db.query(sql, [
-            reciboId, 
+            NoRecibo, 
             ferecibo, // La fecha que viene del frontend
             cedulaId, 
             CodSucursal, 
@@ -384,6 +384,9 @@ exports.createReciboPago = async (req, res) => {
             TxBanco,
             NuRefDocBan
         ]);
+
+        const sql2 = 'UPDATE configuracion SET NoRecibo = ?';
+        await db.execute(sql2, [reciboId]);
 
         // Si se insertó correctamente, devolvemos el éxito
         res.status(201).json({ 
