@@ -230,6 +230,13 @@ exports.addUserToAct = async (req, res) => {
             });
         }
 
+        const [CodUser] = await db.execute(
+            'SELECT CodUser FROM clientes WHERE NuCedula = ?',
+            [NuCedula]
+        )
+
+        const nextCodUser = CodUser[0]?.CodUser || null;
+
         // --- PASO 3: Inserción en DeActosGrados ---
         const sqlInsert = `INSERT INTO DeActosGrados 
             (CodigoActo, Nocontrato, NuCedula, Nombre, Txcontacto, MnContrato, MnPagado, MnSaldo, MnInicial, MaEdoCont, CodUser, Chemise, MnDescuento, Fecha, CodSucursal) 
@@ -238,7 +245,7 @@ exports.addUserToAct = async (req, res) => {
         const params = [
             CodigoActo ?? null, NoContrato ?? null, NuCedula ?? null, Nombre ?? null,
             Txcontacto ?? null, MnContrato ?? 0, MnPagado ?? 0, MnSaldo ?? 0,
-            MnInicial ?? 0, CodUser ?? null, Chemise ?? null, MnDescuento ?? 0, CodSucursal ?? null
+            MnInicial ?? 0, nextCodUser ?? null, Chemise ?? null, MnDescuento ?? 0, CodSucursal ?? null
         ];
 
         await connection.execute(sqlInsert, params);

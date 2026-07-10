@@ -21,8 +21,13 @@ exports.addClient = async (req, res) => {
     } 
 
     try{
-        const sql = "INSERT INTO clientes (NuCedula, TxNombre, TxDireccion, TxCelular, TxEmail) VALUES (?, ?, ?, ?, ?)";
-        const [rows] = await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail]);
+        const [result] = await db.execute(
+            'SELECT COALESCE(MAX(CodUser), 0) + 1 AS nextCodUser FROM clientes'
+        )
+        const nextCodUser = result[0].nextCodUser;
+
+        const sql = "INSERT INTO clientes (NuCedula, TxNombre, TxDireccion, TxCelular, TxEmail, CodUser) VALUES (?, ?, ?, ?, ?, ?)";
+        const [rows] = await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, nextCodUser]);
 
         res.status(201).json({ 
             message: 'Client added successfully',
