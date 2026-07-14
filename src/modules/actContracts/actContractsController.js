@@ -457,3 +457,25 @@ exports.createDeposito = async (req, res) => {
         });
     }
 }
+
+exports.updateTotals = async (req, res) => {
+    const { CodigoActo, NuCedula } = req.params;
+    const { MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial } = req.body;
+
+    if(!CodigoActo || !NuCedula){
+        return res.status(400).json({
+            status: 'error',
+            message: "Faltan parámetros requeridos: CodigoActo y NuCedula"
+        });
+    }
+
+    try{
+        const sql = `UPDATE deactosgrados SET MnContrato = ?, MnDescuento = ?, MnPagado = ?, MnSaldo = ?, MnInicial = ? WHERE CodigoActo = ? AND NuCedula = ?`;
+        const [rows] = await db.query(sql, [MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial, CodigoActo, NuCedula]);
+        res.json({ status: 'success', message: 'Totales actualizados correctamente', affectedRows: rows.affectedRows });
+    } catch (error){
+        console.error("Error al actualizar los totales:", error);
+        res.status(500).json({ status: 'error', message: "Error interno al intentar actualizar los totales", details: error.message });
+
+    }
+}
