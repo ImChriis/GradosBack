@@ -472,7 +472,7 @@ exports.updateTotals = async (req, res) => {
     try{
         const sql = `UPDATE deactosgrados SET MnContrato = ?, MnDescuento = ?, MnPagado = ?, MnSaldo = ?, MnInicial = ? WHERE CodigoActo = ? AND NuCedula = ?`;
         const [rows] = await db.query(sql, [MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial, CodigoActo, NuCedula]);
-        res.json({ status: 'success', message: 'Totales actualizados correctamente', affectedRows: rows.affectedRows });
+        res.json({ status: 'success', message: 'Totales actualizados correctamente', affectedRows: rows.affectedRows, data: { MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial } });
     } catch (error){
         console.error("Error al actualizar los totales:", error);
         res.status(500).json({ status: 'error', message: "Error interno al intentar actualizar los totales", details: error.message });
