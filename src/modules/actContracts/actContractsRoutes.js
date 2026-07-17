@@ -18,6 +18,7 @@ router.post('/createAct', actContractsController.createAct);
 router.put('/updateAct/:codigoActo', actContractsController.updateAct);
 router.post('/createDeposito', actContractsController.createDeposito);
 router.put('/updateTotals/:CodigoActo/:NuCedula', actContractsController.updateTotals);
+router.post('/printReciboPdf/:NoRecibo/:usuarioReporte', actContractsController.printReciboPdf);
 // router.post('/add', actContractsController.addActContract);
 // router.put('/update/:CoContrato', actContractsController.updateActContract);
 
