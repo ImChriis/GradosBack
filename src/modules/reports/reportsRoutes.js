@@ -13,5 +13,6 @@ router.post('/clientsExcel', reportsController.clientsExcel);
 router.post('/actListPdf', reportsController.actListPdf);
 router.post('/actListExcel', reportsController.actListExcel);
 router.post('/actListTxt', reportsController.actListTxt);
+router.post('/generateClosingPdf', reportsController.generateClosingPdf);
 
 module.exports = router;

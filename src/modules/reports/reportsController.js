@@ -1413,3 +1413,320 @@ exports.actListTxt = async (req, res) => {
         }
     }
 };
+
+exports.generateClosingPdf = async (req, res) => {
+    const { ferecibo, NoCierre, usuarioReporte } = req.body;
+
+    if (!ferecibo || !NoCierre) {
+        return res.status(400).json({
+            error: "Parámetros incompletos",
+            message: "Los campos ferecibo y NoCierre son obligatorios."
+        });
+    }
+
+    // 1. NORMALIZACIÓN DE FECHAS
+    // Extraer estrictamente 'YYYY-MM-DD' de ferecibo sin importar si viene con hora/ISO
+    const fechaFiltroBD = ferecibo.split('T')[0]; 
+    
+    // Preparar formato DD/MM/YYYY para mostrar en el PDF
+    const [year, month, day] = fechaFiltroBD.split('-');
+    const fechaReciboFormateada = `${day}/${month}/${year}`;
+
+    // Fecha actual para registrar la ejecución del cierre (YYYY-MM-DD)
+    const fechaHoy = new Date();
+    const fechaCierreBD = fechaHoy.toISOString().split('T')[0];
+
+    let connection;
+
+    try {
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        // 2. ACTUALIZACIÓN EN BASE DE DATOS
+        const [resRecibos] = await connection.query(
+            `UPDATE recibopago 
+             SET NoCierre = ?, FechaCierre = ? 
+             WHERE DATE(ferecibo) = ?`,
+            [NoCierre, fechaCierreBD, fechaFiltroBD]
+        );
+
+        const [resDepositos] = await connection.query(
+            `UPDATE depositos 
+             SET NoCierre = ?, FechaCierre = ? 
+             WHERE DATE(Fecha) = ?`,
+            [NoCierre, fechaCierreBD, fechaFiltroBD]
+        );
+
+        // Si no se actualizó ningún registro, hacemos rollback y notificamos
+        if (resRecibos.affectedRows === 0 && resDepositos.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                error: "Sin registros actualizados",
+                message: `No se encontraron recibos ni depósitos coincidentes para la fecha ${fechaReciboFormateada}.`
+            });
+        }
+
+        // Confirmar la transacción en la base de datos
+        await connection.commit();
+
+        // 3. CONSULTAS PARA EL REPORTE (Agrupados por el NoCierre recién asignado)
+        const [totalesPorActoYMetodo] = await connection.query(
+            `SELECT 
+                r.CodigoActo,
+                COALESCE(ag.Titulo, 'ACTO NO ESPECIFICADO') AS TituloActo,
+                COALESCE(NULLIF(d.TipoOperacion, ''), 'NO ESPECIFICADO') AS metodoPago,
+                COUNT(d.id) AS cantidadOperaciones,
+                SUM(CAST(d.MnDeposito AS DECIMAL(12,2))) AS totalMetodo
+             FROM depositos d
+             INNER JOIN recibopago r ON d.NoRecibo = r.NoRecibo
+             LEFT JOIN actosgrados ag ON r.CodigoActo = ag.CodigoActo
+             WHERE d.NoCierre = ?
+             GROUP BY r.CodigoActo, ag.Titulo, COALESCE(NULLIF(d.TipoOperacion, ''), 'NO ESPECIFICADO')
+             ORDER BY r.CodigoActo ASC, totalMetodo DESC`,
+            [NoCierre]
+        );
+
+        const [detalleDepositos] = await connection.query(
+            `SELECT 
+                d.NoRecibo, 
+                d.NuCedula, 
+                r.CodigoActo,
+                d.TipoOperacion AS metodoPago, 
+                d.TxBanco, 
+                d.NuDeposito AS referencia, 
+                d.MnDeposito AS monto
+             FROM depositos d
+             INNER JOIN recibopago r ON d.NoRecibo = r.NoRecibo
+             WHERE d.NoCierre = ?
+             ORDER BY r.CodigoActo ASC, d.NoRecibo ASC`,
+            [NoCierre]
+        );
+
+        // 4. AGRUPACIÓN Y ESTRUCTURACIÓN DE DATOS
+        const resumenPorActo = {};
+        let totalGeneralCierre = 0;
+        let totalOperacionesCierre = 0;
+
+        totalesPorActoYMetodo.forEach(item => {
+            const cod = item.CodigoActo || 'SIN_CODIGO';
+            if (!resumenPorActo[cod]) {
+                resumenPorActo[cod] = {
+                    codigoActo: cod,
+                    tituloActo: item.TituloActo,
+                    metodos: [],
+                    totalActo: 0,
+                    operacionesActo: 0
+                };
+            }
+            const monto = Number(item.totalMetodo || 0);
+            const cant = Number(item.cantidadOperaciones || 0);
+
+            resumenPorActo[cod].metodos.push({
+                metodo: item.metodoPago,
+                cantidad: cant,
+                monto: monto
+            });
+
+            resumenPorActo[cod].totalActo += monto;
+            resumenPorActo[cod].operacionesActo += cant;
+
+            totalGeneralCierre += monto;
+            totalOperacionesCierre += cant;
+        });
+
+        // 5. CONSTRUCCIÓN DEL PDF CON PDFKIT
+        const doc = new PDFDocument({
+            size: 'A4',
+            margins: { top: 40, bottom: 20, left: 50, right: 50 },
+            bufferPages: true 
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=cierre-${NoCierre}.pdf`);
+        doc.pipe(res);
+
+        const logoPath = path.join(__dirname, 'logo.png');
+
+        const addHeader = (doc) => {
+            try {
+                doc.image(logoPath, 50, 35, { width: 65 });
+            } catch (error) {
+                // Silencioso si la imagen no se encuentra
+            }
+
+            doc.fontSize(9).font('Helvetica-Bold')
+                .text("Grado`s de Venezuela, C.A.", 130, 40)
+                .font('Helvetica').text("J-30591547-4", 130, 52);
+
+            const fechaImpresion = fechaHoy.toLocaleDateString('es-VE');
+            const horaActual = fechaHoy.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+            doc.fontSize(8).font('Helvetica')
+                .text(`Fecha Impresión: ${fechaImpresion}`, 350, 40, { align: 'right' })
+                .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+                .text(`Usuario: ${usuarioReporte || 'SISTEMA'}`, 350, 60, { align: 'right' });
+
+            doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+            
+            const fullTitle = `REPORTE DE CIERRE DIARIO N° ${NoCierre}`;
+            doc.fontSize(11).font('Helvetica-Bold').text(fullTitle, 50, 95, { align: 'center', width: 495 });
+            
+            doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+        };
+
+        addHeader(doc);
+
+        let currentY = 125;
+        const tableWidth = 495;
+
+        // Subtítulo
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#333333');
+        doc.text(`FECHA RECIBOS: ${fechaReciboFormateada}    |    FECHA PROCESADO: ${fechaHoy.toLocaleDateString('es-VE')}`, 50, currentY);
+        currentY += 20;
+
+        // --- DIBUJAR RESUMEN POR CADA ACTO ---
+        Object.values(resumenPorActo).forEach(acto => {
+            if (currentY > 680) {
+                doc.addPage();
+                addHeader(doc);
+                currentY = 130;
+            }
+
+            doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
+            doc.text(`ACTO ${acto.codigoActo}: ${acto.tituloActo.toUpperCase()}`, 50, currentY);
+            currentY += 12;
+
+            doc.rect(50, currentY, tableWidth, 16).fillAndStroke('#EAEAEA', '#000000');
+            doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+            doc.text("MÉTODO DE PAGO", 60, currentY + 4, { width: 230 });
+            doc.text("CANT. OP.", 290, currentY + 4, { width: 80, align: 'center' });
+            doc.text("SUBTOTAL", 380, currentY + 4, { width: 155, align: 'right' });
+            currentY += 16;
+
+            acto.metodos.forEach((m, idx) => {
+                const rowH = 16;
+                if ((idx + 1) % 2 === 0) {
+                    doc.fillColor('#FAFAFA').rect(50, currentY, tableWidth, rowH).fill();
+                }
+
+                doc.fillColor('#000000').font('Helvetica').fontSize(8);
+                doc.rect(50, currentY, tableWidth, rowH).stroke();
+
+                doc.text(m.metodo.toUpperCase(), 60, currentY + 4, { width: 230 });
+                doc.text(m.cantidad.toString(), 290, currentY + 4, { width: 80, align: 'center' });
+                doc.text(m.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 4, { width: 155, align: 'right' });
+
+                currentY += rowH;
+            });
+
+            // Subtotal
+            doc.font('Helvetica-Bold').fontSize(8);
+            doc.rect(50, currentY, tableWidth, 18).fillAndStroke('#F0F4F8', '#000000');
+            doc.fillColor('#102A43');
+            doc.text(`SUBTOTAL ACTO ${acto.codigoActo}`, 60, currentY + 5, { width: 230 });
+            doc.text(acto.operacionesActo.toString(), 290, currentY + 5, { width: 80, align: 'center' });
+            doc.text(acto.totalActo.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 5, { width: 155, align: 'right' });
+
+            currentY += 25;
+        });
+
+        // --- TOTAL GENERAL ---
+        if (currentY > 700) {
+            doc.addPage();
+            addHeader(doc);
+            currentY = 130;
+        }
+
+        doc.font('Helvetica-Bold').fontSize(9);
+        doc.rect(50, currentY, tableWidth, 22).fillAndStroke('#D1E7DD', '#000000');
+        doc.fillColor('#0F5132');
+        doc.text("TOTAL GENERAL DEL CIERRE (TODOS LOS ACTOS)", 60, currentY + 7, { width: 230 });
+        doc.text(totalOperacionesCierre.toString(), 290, currentY + 7, { width: 80, align: 'center' });
+        doc.text(totalGeneralCierre.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 7, { width: 155, align: 'right' });
+
+        currentY += 35;
+
+        // --- DETALLE DE TRANSACCIONES ---
+        if (currentY > 650) {
+            doc.addPage();
+            addHeader(doc);
+            currentY = 130;
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
+        doc.text("DETALLE GENERAL DE TRANSACCIONES", 50, currentY);
+        currentY += 12;
+
+        const drawDetailHeader = (y) => {
+            doc.rect(50, y, tableWidth, 16).fillAndStroke('#E0E0E0', '#000000');
+            doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+            doc.text("ACTO", 55, y + 4, { width: 45 });
+            doc.text("RECIBO", 105, y + 4, { width: 50 });
+            doc.text("CÉDULA", 160, y + 4, { width: 65 });
+            doc.text("MÉTODO", 230, y + 4, { width: 80 });
+            doc.text("BANCO / REF", 315, y + 4, { width: 120 });
+            doc.text("MONTO", 440, y + 4, { width: 95, align: 'right' });
+            return y + 16;
+        };
+
+        currentY = drawDetailHeader(currentY);
+        doc.font('Helvetica').fontSize(8);
+
+        detalleDepositos.forEach((dep, index) => {
+            if (currentY > 710) {
+                doc.addPage();
+                addHeader(doc);
+                currentY = 130;
+                currentY = drawDetailHeader(currentY);
+                doc.font('Helvetica').fontSize(8);
+            }
+
+            const rowHeight = 15;
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, currentY, tableWidth, rowHeight).fill();
+            }
+
+            doc.fillColor('#000000');
+            doc.rect(50, currentY, tableWidth, rowHeight).stroke();
+
+            const bancoRef = [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ');
+
+            doc.text(dep.CodigoActo?.toString() || '', 55, currentY + 3, { width: 45 });
+            doc.text(dep.NoRecibo?.toString() || '', 105, currentY + 3, { width: 50 });
+            doc.text(dep.NuCedula?.toString() || '', 160, currentY + 3, { width: 65 });
+            doc.text((dep.metodoPago || '').toUpperCase(), 230, currentY + 3, { width: 80 });
+            doc.text(bancoRef.toUpperCase(), 315, currentY + 3, { width: 120, lineBreak: false, ellipsis: true });
+            doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 440, currentY + 3, { width: 95, align: 'right' });
+
+            currentY += rowHeight;
+        });
+
+        // 6. NUMERACIÓN DE PÁGINAS Y FOOTER EN SEGUNDA PASADA
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            const footerBaseY = 750;
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            doc.fontSize(8).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 8, { align: 'center', width: 495 });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 18, { align: 'center', width: 495 });
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, 780, { align: 'right', width: 495 });
+        }
+
+        doc.end();
+
+    } catch (err) {
+        if (connection) {
+            await connection.rollback();
+        }
+        console.error("Error al procesar el cierre:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Error interno al procesar el cierre y generar el PDF." });
+        }
+    } finally {
+        if (connection) {
+            connection.release();
+        }
+    }
+};
