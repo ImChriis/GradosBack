@@ -287,6 +287,94 @@ exports.addUserToAct = async (req, res) => {
     }
 };
 
+exports.removeUserFromAct = async (req, res) => {
+    const { CodigoActo, NuCedula } = req.params;
+
+    if (!CodigoActo || !NuCedula) {
+        return res.status(400).json({
+            status: 'error',
+            message: "Los campos CodigoActo y NuCedula son obligatorios."
+        });
+    }
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // --- PASO 1: Verificar existencia del registro y consultar estado financiero/cierre ---
+        const [resPersona] = await connection.execute(
+            `SELECT Nocontrato, MnPagado, NoCierre 
+             FROM DeActosGrados 
+             WHERE CodigoActo = ? AND NuCedula = ?`, 
+            [CodigoActo, NuCedula]
+        );
+
+        if (resPersona.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ 
+                status: 'error', 
+                message: `No se encontró la persona con cédula ${NuCedula} inscrita en el acto ${CodigoActo}.` 
+            });
+        }
+
+        const registro = resPersona[0];
+
+        // --- PASO 2: Validar si el registro ya forma parte de un Cierre Diario ---
+        if (registro.NoCierre && registro.NoCierre !== '' && registro.NoCierre !== 0) {
+            await connection.rollback();
+            return res.status(400).json({
+                status: 'error',
+                message: `No se puede eliminar: El contrato N° ${registro.Nocontrato} ya fue auditado en el Cierre N° ${registro.NoCierre}.`
+            });
+        }
+
+        // --- PASO 3: Validar pagos en la tabla principal (MnPagado) ---
+        if (Number(registro.MnPagado) > 0) {
+            await connection.rollback();
+            return res.status(400).json({
+                status: 'error',
+                message: `No se puede eliminar: El usuario registra un monto pagado de ${registro.MnPagado}. Debe anular los pagos primero.`
+            });
+        }
+
+        // --- PASO 4: Validar existencia de recibos de pago en 'recibopago' ---
+        const [resRecibos] = await connection.execute(
+            `SELECT COUNT(*) AS totalRecibos 
+             FROM recibopago 
+             WHERE CodigoActo = ? AND NuCedula = ?`,
+            [CodigoActo, NuCedula]
+        );
+
+        if (resRecibos[0].totalRecibos > 0) {
+            await connection.rollback();
+            return res.status(400).json({
+                status: 'error',
+                message: `No se puede eliminar: La persona tiene ${resRecibos[0].totalRecibos} recibo(s) de pago registrado(s) en la base de datos.`
+            });
+        }
+
+        // --- PASO 5: Proceder con la eliminación ---
+        const sqlDelete = "DELETE FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?";
+        await connection.execute(sqlDelete, [CodigoActo, NuCedula]);
+
+        await connection.commit();
+
+        res.json({ 
+            status: 'success', 
+            message: `El usuario con cédula ${NuCedula} fue eliminado exitosamente del acto ${CodigoActo}.`,
+            contratoEliminado: registro.Nocontrato
+        });
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        console.error("Error al eliminar usuario del acto:", error);
+        res.status(500).json({ error: "Error interno del servidor al intentar eliminar la inscripción." });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
 exports.getPaymentDataByContract = async (req, res) => {
     const { NoContrato, CodigoActo, NuCedula } = req.params;
 
