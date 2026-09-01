@@ -34,18 +34,20 @@ exports.getActsUsersByCodigoActo = async (req, res) => {
     d.MnSaldo, 
     d.MnContrato, 
     d.MnDescuento, 
-    d.MnInicial
-FROM deactosgrados d
-INNER JOIN clientes c ON c.NuCedula = d.NuCedula
-WHERE d.CodigoActo = ?
-ORDER BY d.Nombre ASC;`;
-        const [rows] = await db.query(sql, [CodigoActo]);
-        res.json(rows);
-    }catch (error){
-        console.error('Error fetching acts users:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+    d.MnInicial,
+    d.Txcontacto,
+    d.Chemise
+    FROM deactosgrados d
+    INNER JOIN clientes c ON c.NuCedula = d.NuCedula
+    WHERE d.CodigoActo = ?
+    ORDER BY d.Nombre ASC;`;
+            const [rows] = await db.query(sql, [CodigoActo]);
+            res.json(rows);
+        }catch (error){
+            console.error('Error fetching acts users:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
     }
-}
 
 exports.createAct = async(req, res) => {
     const { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
@@ -282,6 +284,85 @@ exports.addUserToAct = async (req, res) => {
         if (connection) await connection.rollback();
         console.error("Error en registro:", error);
         res.status(500).json({ error: "Error interno del servidor" });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+exports.updateActUser = async (req, res) => {
+    const { CodigoActo, NuCedula, } = req.params;
+    const {  NoContrato, Chemise } = req.body;
+
+    // Validar parámetros requeridos para identificar el registro
+    if (!CodigoActo || !NuCedula) {
+        return res.status(400).json({ 
+            status: 'error', 
+            message: 'CodigoActo y NuCedula son requeridos para identificar el registro.' 
+        });
+    }
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // --- PASO 1: Verificar que el registro exista ---
+        const [existente] = await connection.execute(
+            "SELECT NoContrato FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?", 
+            [CodigoActo, NuCedula]
+        );
+
+        if (existente.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ 
+                status: 'error', 
+                message: 'El usuario no está registrado en este acto.' 
+            });
+        }
+
+        // --- PASO 2: Si cambia NoContrato, validar contra límite de Configuración ---
+        if (NoContrato && NoContrato !== existente[0].NoContrato) {
+            const [resConfig] = await connection.execute("SELECT NoContrato FROM Configuracion LIMIT 1");
+            const contratoLimite = parseInt(resConfig[0]?.NoContrato || 0);
+
+            if (parseInt(NoContrato) > contratoLimite) {
+                await connection.rollback();
+                return res.status(400).json({ 
+                    status: 'error', 
+                    message: `El No. de Contrato es inválido. Máximo autorizado: ${contratoLimite}.` 
+                });
+            }
+        }
+
+        // --- PASO 3: Actualizar solo los campos deseados (Chemise y/o NoContrato) ---
+        const sqlUpdate = `
+            UPDATE DeActosGrados 
+            SET 
+                Chemise = COALESCE(?, Chemise),
+                NoContrato = COALESCE(?, NoContrato)
+            WHERE CodigoActo = ? AND NuCedula = ?
+        `;
+
+        const params = [
+            Chemise ?? null,
+            NoContrato ?? null,
+            CodigoActo,
+            NuCedula
+        ];
+
+        await connection.execute(sqlUpdate, params);
+
+        await connection.commit();
+
+        res.json({ 
+            status: 'success', 
+            message: "Registro actualizado correctamente." 
+        });
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        console.error("Error en actualización:", error);
+        res.status(500).json({ error: "Error interno del servidor al actualizar." });
     } finally {
         if (connection) connection.release();
     }
@@ -811,6 +892,222 @@ exports.printReciboPdf = async (req, res) => {
     doc.end();
 }
 
+exports.printReciboPdfOnePage = async (req, res) => {
+    const { NoRecibo, usuarioReporte } = req.params;
+
+    if (!NoRecibo) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'Falta el parámetro NoRecibo'
+        });
+    }
+
+    // Tamaño Carta Estándar (612 x 792 pt)
+    const doc = new PDFDocument({
+        size: 'LETTER',
+        margins: { top: 25, bottom: 25, left: 28, right: 28 },
+        bufferPages: true
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=recibo-${NoRecibo}.pdf`);
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+
+    const formatMoney = (value) => {
+        return new Intl.NumberFormat('es-VE', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(Number(value || 0));
+    };
+
+    const formatDate = (value) => {
+        if (!value) return '';
+        const date = new Date(value);
+        return date.toLocaleDateString('es-VE');
+    };
+
+    const getTextHeight = (text, width, fontSize = 9, font = 'Helvetica') => {
+        doc.fontSize(fontSize).font(font);
+        return doc.heightOfString(String(text ?? ''), { width });
+    };
+
+    const addHeader = (title, startY) => {
+        try {
+            doc.image(logoPath, 28, startY + 22, { width: 44 });
+        } catch (error) {
+            console.log('Error logo');
+        }
+
+        doc.fontSize(8).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 85, startY + 24)
+            .font('Helvetica').text("J-30591547-4", 85, startY + 35);
+
+        const fechaActual = new Date().toLocaleDateString('es-VE');
+        const horaActual = new Date().toLocaleTimeString('es-VE', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+
+        doc.fontSize(7.5).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 420, startY + 22, { align: 'right', width: 164 })
+            .text(`Hora: ${horaActual}`, 420, startY + 32, { align: 'right', width: 164 })
+            .text(`Usuario: ${usuarioReporte || ''}`, 420, startY + 42, { align: 'right', width: 164 });
+
+        doc.moveTo(28, startY + 60).lineTo(584, startY + 60).lineWidth(0.5).stroke();
+        doc.fontSize(10.5).font('Helvetica-Bold').text(title, 28, startY + 67, { align: 'center', width: 556 });
+        doc.moveTo(28, startY + 84).lineTo(584, startY + 84).lineWidth(0.5).stroke();
+    };
+
+    const addFooter = (startY) => {
+        const footerBaseY = startY + 345;
+        doc.moveTo(28, footerBaseY).lineTo(584, footerBaseY).lineWidth(0.5).stroke();
+        doc.fontSize(7.5).font('Helvetica').fillColor('#000000');
+        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerBaseY + 6, {
+            align: 'center',
+            width: 556
+        });
+        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 28, footerBaseY + 16, {
+            align: 'center',
+            width: 556
+        });
+    };
+
+    try {
+        const [reciboRows] = await db.query(`
+            SELECT
+                r.NoRecibo,
+                r.FeRecibo,
+                r.NuCedula,
+                c.txnombre AS nombreCliente,
+                r.txconceprec AS Motivo,
+                r.mnrecibo AS MnPagado,
+                r.mnsaldorec AS MnSaldo,
+                r.NoContrato
+            FROM ReciboPago r
+            LEFT JOIN clientes c ON c.NuCedula = r.NuCedula
+            WHERE r.NoRecibo = ?
+            LIMIT 1
+        `, [NoRecibo]);
+
+        if (reciboRows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'No se encontró el recibo'
+            });
+        }
+
+        const recibo = reciboRows[0];
+
+        const [depositosRows] = await db.query(`
+            SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito
+            FROM Depositos
+            WHERE NoRecibo = ? AND NoContrato = ? AND NuCedula = ?
+            ORDER BY Fecha ASC
+        `, [recibo.NoRecibo, recibo.NoContrato, recibo.NuCedula]);
+
+        const buildFormaPago = (pago) => {
+            const tipo = String(pago.TipoOperacion || '').trim().toUpperCase();
+            const banco = String(pago.TxBanco || '').trim();
+            const referencia = String(pago.NuDeposito || '').trim();
+            const monto = formatMoney(pago.MnDeposito || 0);
+
+            if (tipo.includes('EFECTIVO')) return `EFECTIVO | ${monto}`;
+            if (tipo.includes('T.DEBITO') || tipo.includes('T DEBITO') || tipo.includes('DEBITO')) return `T.DEBITO ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+            if (tipo.includes('T.CREDITO') || tipo.includes('T CREDITO') || tipo.includes('CREDITO')) return `T.CREDITO ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+            if (tipo.includes('DEPOSITO')) return `DEPOSITO ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+            if (tipo.includes('CHEQUE')) return `CHEQUE ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+
+            return `${tipo || 'OTRO'}${banco ? ` ${banco}` : ''}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+        };
+
+        const drawReceipt = (title, startY) => {
+            addHeader(title, startY);
+
+            let y = startY + 98;
+            const leftX = 28;
+            const rightX = 340;
+            const labelW = 95;
+            const rowGap = 14;
+
+            const drawRow = (label, value, width = 260) => {
+                doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
+                doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: width - labelW });
+                y += rowGap;
+            };
+
+            const drawWrappedRow = (label, value, width = 260) => {
+                doc.fontSize(8.5).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
+                doc.font('Helvetica');
+
+                const textHeight = getTextHeight(value, width - labelW, 8.5, 'Helvetica');
+                doc.text(value ?? '', leftX + labelW, y, { width: width - labelW });
+
+                y += Math.max(rowGap, textHeight + 2);
+            };
+
+            drawRow('No. Recibo:', recibo.NoRecibo, 260);
+            drawRow('No. Cédula:', recibo.NuCedula, 260);
+            drawWrappedRow('Nombre del Cliente:', recibo.nombreCliente, 260);
+            drawWrappedRow('Motivo:', recibo.Motivo, 260);
+            drawRow('Monto Pagado:', formatMoney(recibo.MnPagado), 260);
+
+            if (depositosRows.length === 0) {
+                doc.fontSize(8.5).font('Helvetica').text('Sin formas de pago registradas.', leftX, y);
+                y += 14;
+            } else {
+                depositosRows.forEach((pago) => {
+                    const detalle = buildFormaPago(pago);
+                    const detalleHeight = getTextHeight(detalle, 556 - 82, 8.5, 'Helvetica');
+
+                    doc.fontSize(8.5).font('Helvetica-Bold').text('Forma de Pago:', leftX, y);
+                    doc.font('Helvetica').text(detalle, leftX + 82, y, { width: 556 - 82 });
+                    y += Math.max(14, detalleHeight + 1);
+                });
+            }
+
+            drawRow('Saldo:', formatMoney(recibo.MnSaldo), 260);
+
+            // Bloque lateral derecho (Contrato y Fecha)
+            doc.fontSize(8.5).font('Helvetica-Bold').text('No. Contrato:', rightX, startY + 98);
+            doc.font('Helvetica').text(String(recibo.NoContrato || ''), rightX + 78, startY + 98, { width: 120 });
+
+            doc.fontSize(8.5).font('Helvetica-Bold').text('Fecha:', rightX, startY + 113);
+            doc.font('Helvetica').text(formatDate(recibo.FeRecibo), rightX + 78, startY + 113, { width: 120 });
+
+            addFooter(startY);
+        };
+
+        // 1. Dibujar Recibo Original (Mitad Superior, Y = 0)
+        drawReceipt('RECIBO', 0);
+
+        // 2. Línea Punteada de División / Corte (Centro exacto de Hoja Carta: 792 / 2 = 396pt)
+        const middleY = 396;
+        doc.save()
+           .dash(4, { space: 3 })
+           .moveTo(28, middleY)
+           .lineTo(584, middleY)
+           .lineWidth(0.5)
+           .stroke()
+           .undash()
+           .restore();
+
+        // 3. Dibujar Copia Cliente (Mitad Inferior, Y = 396)
+        drawReceipt('RECIBO (COPIA CLIENTE)', 396);
+
+    } catch (error) {
+        console.error('Error generando recibo PDF:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Error al generar el PDF'
+        });
+    }
+
+    doc.end();
+};
+
 exports.sendReciboEmail = async (req, res) => {
     const { NoRecibo, usuarioReporte } = req.params;
     const { emailCliente } = req.body; // Correo enviado en el body
@@ -1068,6 +1365,269 @@ exports.sendReciboEmail = async (req, res) => {
         };
 
         // 6. Enviar el correo
+        await transporter.sendMail(mailOptions);
+
+        return res.status(200).json({
+            status: 'success',
+            message: `Recibo enviado exitosamente a ${emailCliente}`
+        });
+
+    } catch (error) {
+        console.error('Error enviando correo del recibo PDF:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Error al procesar el envío del correo'
+        });
+    }
+};
+
+exports.sendReciboEmailOnePage = async (req, res) => {
+    const { NoRecibo, usuarioReporte } = req.params;
+    const { emailCliente } = req.body;
+
+    if (!NoRecibo) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'Falta el parámetro NoRecibo'
+        });
+    }
+
+    if (!emailCliente) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'Falta el parámetro emailCliente en el cuerpo de la solicitud'
+        });
+    }
+
+    try {
+        const [reciboRows] = await db.query(`
+            SELECT
+                r.NoRecibo,
+                r.FeRecibo,
+                r.NuCedula,
+                c.txnombre AS nombreCliente,
+                r.txconceprec AS Motivo,
+                r.mnrecibo AS MnPagado,
+                r.mnsaldorec AS MnSaldo,
+                r.NoContrato
+            FROM ReciboPago r
+            LEFT JOIN clientes c ON c.NuCedula = r.NuCedula
+            WHERE r.NoRecibo = ?
+            LIMIT 1
+        `, [NoRecibo]);
+
+        if (reciboRows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'No se encontró el recibo'
+            });
+        }
+
+        const recibo = reciboRows[0];
+
+        const [depositosRows] = await db.query(`
+            SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito
+            FROM Depositos
+            WHERE NoRecibo = ? AND NoContrato = ? AND NuCedula = ?
+            ORDER BY Fecha ASC
+        `, [recibo.NoRecibo, recibo.NoContrato, recibo.NuCedula]);
+
+        // Promesa para generar el PDF completo en 1 página Carta
+        const pdfBuffer = await new Promise((resolve, reject) => {
+            const doc = new PDFDocument({
+                size: 'LETTER', // 612 x 792
+                margins: { top: 20, bottom: 20, left: 28, right: 28 },
+                bufferPages: true
+            });
+
+            const buffers = [];
+            doc.on('data', buffers.push.bind(buffers));
+            doc.on('end', () => resolve(Buffer.concat(buffers)));
+            doc.on('error', reject);
+
+            const logoPath = path.join(__dirname, 'logo.png');
+
+            const formatMoney = (value) => {
+                return new Intl.NumberFormat('es-VE', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(Number(value || 0));
+            };
+
+            const formatDate = (value) => {
+                if (!value) return '';
+                const date = new Date(value);
+                return date.toLocaleDateString('es-VE');
+            };
+
+            const getTextHeight = (text, width, fontSize = 8, font = 'Helvetica') => {
+                doc.fontSize(fontSize).font(font);
+                return doc.heightOfString(String(text ?? ''), { width });
+            };
+
+            // Dibujar encabezado dinamizando la coordenada 'startY'
+            const addHeader = (title, startY) => {
+                try {
+                    doc.image(logoPath, 28, startY + 2, { width: 42 });
+                } catch (error) {
+                    console.log('Error logo');
+                }
+
+                doc.fontSize(8).font('Helvetica-Bold')
+                    .text("Grado`s de Venezuela, C.A.", 80, startY + 4)
+                    .font('Helvetica').text("J-30591547-4", 80, startY + 15);
+
+                const fechaActual = new Date().toLocaleDateString('es-VE');
+                const horaActual = new Date().toLocaleTimeString('es-VE', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
+
+                doc.fontSize(7).font('Helvetica')
+                    .text(`Fecha: ${fechaActual}`, 420, startY + 2, { align: 'right', width: 164 })
+                    .text(`Hora: ${horaActual}`, 420, startY + 12, { align: 'right', width: 164 })
+                    .text(`Usuario: ${usuarioReporte || ''}`, 420, startY + 22, { align: 'right', width: 164 });
+
+                doc.moveTo(28, startY + 36).lineTo(584, startY + 36).lineWidth(0.5).stroke();
+                doc.fontSize(10).font('Helvetica-Bold').text(title, 28, startY + 42, { align: 'center', width: 556 });
+                doc.moveTo(28, startY + 58).lineTo(584, startY + 58).lineWidth(0.5).stroke();
+            };
+
+            // Dibujar pie de página relativo a 'startY'
+            const addFooter = (startY) => {
+                const footerY = startY + 320;
+                doc.moveTo(28, footerY).lineTo(584, footerY).lineWidth(0.5).stroke();
+                doc.fontSize(7).font('Helvetica').fillColor('#000000');
+                doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 28, footerY + 5, {
+                    align: 'center',
+                    width: 556
+                });
+                doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 28, footerY + 14, {
+                    align: 'center',
+                    width: 556
+                });
+            };
+
+            const buildFormaPago = (pago) => {
+                const tipo = String(pago.TipoOperacion || '').trim().toUpperCase();
+                const banco = String(pago.TxBanco || '').trim();
+                const referencia = String(pago.NuDeposito || '').trim();
+                const monto = formatMoney(pago.MnDeposito || 0);
+
+                if (tipo.includes('EFECTIVO')) return `EFECTIVO | ${monto}`;
+                if (tipo.includes('T.DEBITO') || tipo.includes('T DEBITO') || tipo.includes('DEBITO')) return `T.DEBITO ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+                if (tipo.includes('T.CREDITO') || tipo.includes('T CREDITO') || tipo.includes('CREDITO')) return `T.CREDITO ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+                if (tipo.includes('DEPOSITO')) return `DEPOSITO ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+                if (tipo.includes('CHEQUE')) return `CHEQUE ${banco}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+
+                return `${tipo || 'OTRO'}${banco ? ` ${banco}` : ''}${referencia ? ` | ${referencia}` : ''} | ${monto}`;
+            };
+
+            // Función central para construir un bloque completo de recibo
+            const drawSingleReceipt = (title, startY) => {
+                addHeader(title, startY);
+
+                let y = startY + 68;
+                const leftX = 28;
+                const rightX = 340;
+                const labelW = 95;
+                const rowGap = 13;
+
+                const drawRow = (label, value, width = 260) => {
+                    doc.fontSize(8).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
+                    doc.font('Helvetica').text(value ?? '', leftX + labelW, y, { width: width - labelW });
+                    y += rowGap;
+                };
+
+                const drawWrappedRow = (label, value, width = 260) => {
+                    doc.fontSize(8).font('Helvetica-Bold').text(label, leftX, y, { width: labelW });
+                    doc.font('Helvetica');
+                    const textHeight = getTextHeight(value, width - labelW, 8, 'Helvetica');
+                    doc.text(value ?? '', leftX + labelW, y, { width: width - labelW });
+                    y += Math.max(rowGap, textHeight + 2);
+                };
+
+                drawRow('No. Recibo:', recibo.NoRecibo, 260);
+                drawRow('No. Cédula:', recibo.NuCedula, 260);
+                drawWrappedRow('Nombre del Cliente:', recibo.nombreCliente, 260);
+                drawWrappedRow('Motivo:', recibo.Motivo, 260);
+                drawRow('Monto Pagado:', formatMoney(recibo.MnPagado), 260);
+
+                if (depositosRows.length === 0) {
+                    doc.fontSize(8).font('Helvetica').text('Sin formas de pago registradas.', leftX, y);
+                    y += 12;
+                } else {
+                    depositosRows.forEach((pago) => {
+                        const detalle = buildFormaPago(pago);
+                        const detalleHeight = getTextHeight(detalle, 556 - 82, 8, 'Helvetica');
+                        doc.fontSize(8).font('Helvetica-Bold').text('Forma de Pago:', leftX, y);
+                        doc.font('Helvetica').text(detalle, leftX + 82, y, { width: 556 - 82 });
+                        y += Math.max(12, detalleHeight + 2);
+                    });
+                }
+
+                drawRow('Saldo:', formatMoney(recibo.MnSaldo), 260);
+
+                // Columna derecha
+                const rightY = startY + 68;
+                doc.fontSize(8).font('Helvetica-Bold').text('No. Contrato:', rightX, rightY);
+                doc.font('Helvetica').text(String(recibo.NoContrato || ''), rightX + 78, rightY, { width: 120 });
+
+                doc.fontSize(8).font('Helvetica-Bold').text('Fecha:', rightX, rightY + 14);
+                doc.font('Helvetica').text(formatDate(recibo.FeRecibo), rightX + 78, rightY + 14, { width: 120 });
+
+                addFooter(startY);
+            };
+
+            // Dibujar recibo superior (Copia Cliente)
+            drawSingleReceipt('RECIBO - COPIA CLIENTE', 15);
+
+            // Línea de corte punteada intermedia
+            const lineY = 396;
+            doc.save()
+               .moveTo(28, lineY)
+               .lineTo(584, lineY)
+               .lineWidth(0.8)
+               .dash(4, { space: 3 })
+               .strokeColor('#666666')
+               .stroke()
+               .restore();
+
+            doc.fontSize(7).font('Helvetica-Bold').fillColor('#666666')
+               .text('- - - - - - - - - - - - - - - - - - - - - - - - CORTAR AQUÍ - - - - - - - - - - - - - - - - - - - - - - - -', 28, lineY - 3, {
+                   align: 'center',
+                   width: 556
+               });
+
+            // Dibujar recibo inferior (Copia Empresa)
+            drawSingleReceipt('RECIBO - COPIA EMPRESA', 415);
+
+            doc.end();
+        });
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER || 'vitalsense2025@gmail.com',
+                pass: process.env.EMAIL_PASS || 'ecub jsrn xyct dcne'
+            }
+        });
+
+        const mailOptions = {
+            from: '"Grado\'s de Venezuela" <info.gradosdevzla@gmail.com>',
+            to: emailCliente,
+            subject: `Comprobante de Pago - Recibo N° ${recibo.NoRecibo}`,
+            text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\nAdjunto a este correo encontrará su recibo de pago N° ${recibo.NoRecibo}.\n\nAtentamente,\nGrado's de Venezuela, C.A.`,
+            attachments: [
+                {
+                    filename: `recibo-${recibo.NoRecibo}.pdf`,
+                    content: pdfBuffer,
+                    contentType: 'application/pdf'
+                }
+            ]
+        };
+
         await transporter.sendMail(mailOptions);
 
         return res.status(200).json({

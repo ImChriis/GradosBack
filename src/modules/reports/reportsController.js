@@ -1425,14 +1425,10 @@ exports.generateClosingPdf = async (req, res) => {
     }
 
     // 1. NORMALIZACIÓN DE FECHAS
-    // Extraer estrictamente 'YYYY-MM-DD' de ferecibo sin importar si viene con hora/ISO
     const fechaFiltroBD = ferecibo.split('T')[0]; 
-    
-    // Preparar formato DD/MM/YYYY para mostrar en el PDF
     const [year, month, day] = fechaFiltroBD.split('-');
     const fechaReciboFormateada = `${day}/${month}/${year}`;
 
-    // Fecha actual para registrar la ejecución del cierre (YYYY-MM-DD)
     const fechaHoy = new Date();
     const fechaCierreBD = fechaHoy.toISOString().split('T')[0];
 
@@ -1466,10 +1462,13 @@ exports.generateClosingPdf = async (req, res) => {
             });
         }
 
+        // --- ACTUALIZAR CORRELATIVO EN CONFIGURACION (+1) ---
+        await connection.query("UPDATE Configuracion SET NoCierre = NoCierre + 1");
+
         // Confirmar la transacción en la base de datos
         await connection.commit();
 
-        // 3. CONSULTAS PARA EL REPORTE (Agrupados por el NoCierre recién asignado)
+        // 3. CONSULTAS PARA EL REPORTE
         const [totalesPorActoYMetodo] = await connection.query(
             `SELECT 
                 r.CodigoActo,
@@ -1537,7 +1536,7 @@ exports.generateClosingPdf = async (req, res) => {
         // 5. CONSTRUCCIÓN DEL PDF CON PDFKIT
         const doc = new PDFDocument({
             size: 'A4',
-            margins: { top: 40, bottom: 20, left: 50, right: 50 },
+            margins: { top: 40, bottom: 60, left: 50, right: 50 },
             bufferPages: true 
         });
 
@@ -1584,12 +1583,19 @@ exports.generateClosingPdf = async (req, res) => {
         doc.text(`FECHA RECIBOS: ${fechaReciboFormateada}    |    FECHA PROCESADO: ${fechaHoy.toLocaleDateString('es-VE')}`, 50, currentY);
         currentY += 20;
 
-        // --- DIBUJAR RESUMEN POR CADA ACTO ---
+        // --- DIBUJAR RESUMEN POR CADA ACTO (MÁXIMO 5 ACTOS POR HOJA) ---
+        let actosEnPaginaActual = 0;
+        const maxActosPorPagina = 5;
+
         Object.values(resumenPorActo).forEach(acto => {
-            if (currentY > 680) {
+            // Calcular altura aproximada del bloque de este acto
+            const alturaAproxActo = 12 + 16 + (acto.metodos.length * 16) + 18 + 15;
+
+            if (currentY + alturaAproxActo > 720 || actosEnPaginaActual >= maxActosPorPagina) {
                 doc.addPage();
                 addHeader(doc);
                 currentY = 130;
+                actosEnPaginaActual = 0;
             }
 
             doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
@@ -1628,10 +1634,11 @@ exports.generateClosingPdf = async (req, res) => {
             doc.text(acto.totalActo.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 5, { width: 155, align: 'right' });
 
             currentY += 25;
+            actosEnPaginaActual++;
         });
 
         // --- TOTAL GENERAL ---
-        if (currentY > 700) {
+        if (currentY + 30 > 720) {
             doc.addPage();
             addHeader(doc);
             currentY = 130;
@@ -1646,8 +1653,8 @@ exports.generateClosingPdf = async (req, res) => {
 
         currentY += 35;
 
-        // --- DETALLE DE TRANSACCIONES ---
-        if (currentY > 650) {
+        // --- DETALLE DE TRANSACCIONES CON FILAS DINÁMICAS ---
+        if (currentY + 50 > 720) {
             doc.addPage();
             addHeader(doc);
             currentY = 130;
@@ -1673,7 +1680,19 @@ exports.generateClosingPdf = async (req, res) => {
         doc.font('Helvetica').fontSize(8);
 
         detalleDepositos.forEach((dep, index) => {
-            if (currentY > 710) {
+            const bancoRef = [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ').toUpperCase();
+            const metodoStr = (dep.metodoPago || '').toUpperCase();
+
+            // Calcular altura de celda dinámicamente según la longitud del texto
+            doc.font('Helvetica').fontSize(8);
+            const hBanco = doc.heightOfString(bancoRef, { width: 120 });
+            const hMetodo = doc.heightOfString(metodoStr, { width: 80 });
+            
+            // La altura mínima de fila será 16px, o crecerá si el texto toma más líneas
+            const dynamicRowHeight = Math.max(16, hBanco + 6, hMetodo + 6);
+
+            // Verificar espacio antes de dibujar la fila
+            if (currentY + dynamicRowHeight > 720) {
                 doc.addPage();
                 addHeader(doc);
                 currentY = 130;
@@ -1681,24 +1700,21 @@ exports.generateClosingPdf = async (req, res) => {
                 doc.font('Helvetica').fontSize(8);
             }
 
-            const rowHeight = 15;
             if ((index + 1) % 2 === 0) {
-                doc.fillColor('#FFFFE0').rect(50, currentY, tableWidth, rowHeight).fill();
+                doc.fillColor('#FFFFE0').rect(50, currentY, tableWidth, dynamicRowHeight).fill();
             }
 
             doc.fillColor('#000000');
-            doc.rect(50, currentY, tableWidth, rowHeight).stroke();
+            doc.rect(50, currentY, tableWidth, dynamicRowHeight).stroke();
 
-            const bancoRef = [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ');
+            doc.text(dep.CodigoActo?.toString() || '', 55, currentY + 4, { width: 45 });
+            doc.text(dep.NoRecibo?.toString() || '', 105, currentY + 4, { width: 50 });
+            doc.text(dep.NuCedula?.toString() || '', 160, currentY + 4, { width: 65 });
+            doc.text(metodoStr, 230, currentY + 4, { width: 80 });
+            doc.text(bancoRef, 315, currentY + 4, { width: 120 });
+            doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 440, currentY + 4, { width: 95, align: 'right' });
 
-            doc.text(dep.CodigoActo?.toString() || '', 55, currentY + 3, { width: 45 });
-            doc.text(dep.NoRecibo?.toString() || '', 105, currentY + 3, { width: 50 });
-            doc.text(dep.NuCedula?.toString() || '', 160, currentY + 3, { width: 65 });
-            doc.text((dep.metodoPago || '').toUpperCase(), 230, currentY + 3, { width: 80 });
-            doc.text(bancoRef.toUpperCase(), 315, currentY + 3, { width: 120, lineBreak: false, ellipsis: true });
-            doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 440, currentY + 3, { width: 95, align: 'right' });
-
-            currentY += rowHeight;
+            currentY += dynamicRowHeight;
         });
 
         // 6. NUMERACIÓN DE PÁGINAS Y FOOTER EN SEGUNDA PASADA

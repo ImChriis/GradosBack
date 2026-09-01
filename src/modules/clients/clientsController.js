@@ -21,6 +21,11 @@ exports.addClient = async (req, res) => {
     } 
 
     try{
+        const [existingClient] = await db.query('SELECT * FROM clientes WHERE NuCedula = ?', [nucedula]);
+        if(existingClient.length > 0){
+            return res.status(409).json({ error: 'El cliente con este número de cédula ya existe' });
+        }
+
         const [result] = await db.execute(
             'SELECT COALESCE(MAX(CodUser), 0) + 1 AS nextCodUser FROM clientes'
         )
@@ -34,6 +39,12 @@ exports.addClient = async (req, res) => {
             clientId: rows.insertId
          });
     } catch (error){
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({
+                error: 'El cliente con esta cédula ya se encuentra registrado.'
+            });
+        }
+
         console.error('Error adding client:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
@@ -43,36 +54,52 @@ exports.updateClient = async (req, res) => {
     const { id } = req.params;
     const { nucedula, txnombre, txdireccion, txcelular, txemail } = req.body || {};
 
-    if(!id){
+    if (!id) {
         return res.status(400).json({ error: 'Client ID is required' });
     }
 
-    if(!nucedula || !txnombre){
+    if (!nucedula || !txnombre) {
         return res.status(400).json({
             error: 'Nucedula and TxNombre are mandatory fields'
-        })
+        });
     }
 
-    try{
-        const sql = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ? WHERE id = ?'; 
-        const [rows] = await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, id]);
+    try {
+        const [existingClient] = await db.execute(
+            'SELECT id FROM clientes WHERE NuCedula = ? AND id <> ?',
+            [nucedula, id]
+        );
 
-        if(rows.affectedRows === 0){
-            return res.status(404).json({ error: 'Client not found or no changes made' });
+        if (existingClient.length > 0) {
+            return res.status(409).json({
+                error: 'La cédula ingresada ya pertenece a otro cliente.'
+            });
         }
 
-        res.json({ message: 'Client updated successfully' });
+        const [clientToUpdate] = await db.execute(
+            'SELECT id FROM clientes WHERE id = ?',
+            [id]
+        );
 
-    }catch (error) {
+        if (clientToUpdate.length === 0) {
+            return res.status(404).json({ error: 'Client not found' });
+        }
+
+        const sql = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ? WHERE id = ?'; 
+        await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, id]);
+
+        return res.json({ message: 'Client updated successfully' });
+
+    } catch (error) {
         console.error('Error updating client:', error);
 
-        if(error.code === 'ER_DUP_ENTRY') {
-            return res.status(409).json({ error: 'The new ID card number is already in use' })
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ error: 'The new ID card number is already in use' });
         }
 
-        res.status(500).json({ error: 'Internal Server Error' });
+        return res.status(500).json({ error: 'Internal Server Error' });
     }
-}
+};
 
 exports.getClientsByCedula = async (req, res) => {
     const { nucedula } = req.params;

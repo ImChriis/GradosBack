@@ -17,10 +17,13 @@ router.post('/removeUser/:CodigoActo/:NuCedula', actContractsController.removeUs
 router.post ('/createRecibo', actContractsController.createReciboPago);
 router.post('/createAct', actContractsController.createAct);
 router.put('/updateAct/:codigoActo', actContractsController.updateAct);
+router.put('/updateActUser/:CodigoActo/:NuCedula', actContractsController.updateActUser);
 router.post('/createDeposito', actContractsController.createDeposito);
 router.put('/updateTotals/:CodigoActo/:NuCedula', actContractsController.updateTotals);
 router.post('/printReciboPdf/:NoRecibo/:usuarioReporte', actContractsController.printReciboPdf);
+router.post('/printReciboPdfOnePage/:NoRecibo/:usuarioReporte', actContractsController.printReciboPdfOnePage);
 router.post('/sendReciboEmail/:NoRecibo/:usuarioReporte', actContractsController.sendReciboEmail);
+router.post('/sendReciboEmailOnePage/:NoRecibo/:usuarioReporte', actContractsController.sendReciboEmailOnePage);
 // router.post('/add', actContractsController.addActContract);
 // router.put('/update/:CoContrato', actContractsController.updateActContract);
 
