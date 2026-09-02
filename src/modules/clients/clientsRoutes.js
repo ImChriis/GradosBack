@@ -6,5 +6,6 @@ router.get('/', clientsController.getClients);
 router.get('/:nucedula', clientsController.getClientsByCedula);
 router.post('/add', clientsController.addClient);
 router.put('/update/:id', clientsController.updateClient);
+router.delete('/delete/:id', clientsController.deleteClient);
 
 module.exports = router;                      

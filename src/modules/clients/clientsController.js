@@ -120,3 +120,54 @@ exports.getClientsByCedula = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 }
+
+exports.deleteClient = async (req, res) => {
+    const { id } = req.params;
+
+    if (!id) {
+        return res.status(400).json({ error: 'Client ID is required' });
+    }
+
+    // Obtener conexión del pool para manejar la transacción
+    const connection = await db.getConnection();
+
+    try {
+        // 1. Obtener id y NuCedula del cliente
+        const [existingClient] = await connection.execute(
+            'SELECT id, NuCedula FROM clientes WHERE id = ?',
+            [id]
+        );
+
+        if (existingClient.length === 0) {
+            connection.release();
+            return res.status(404).json({ error: 'Client not found' });
+        }
+
+        const client = existingClient[0];
+
+        // 2. Iniciar la Transacción
+        await connection.beginTransaction();
+
+        // 3. Eliminar de las tablas dependientes usando el campo NuCedula
+        await connection.query('DELETE FROM deactosgrados WHERE NuCedula = ?', [client.NuCedula]);
+        await connection.query('DELETE FROM depositos WHERE NuCedula = ?', [client.NuCedula]);
+        await connection.query('DELETE FROM recibopago WHERE NuCedula = ?', [client.NuCedula]);
+
+        // 4. Eliminar el registro en la tabla principal de clientes usando su id
+        await connection.query('DELETE FROM clientes WHERE id = ?', [client.id]);
+
+        // 5. Confirmar transacción y liberar la conexión
+        await connection.commit();
+        connection.release();
+
+        return res.json({ message: 'Client and all related records deleted successfully' });
+
+    } catch (error) {
+        // En caso de fallo, revertir la transacción y liberar la conexión
+        await connection.rollback();
+        connection.release();
+
+        console.error('Error deleting client in cascade:', error);
+        return res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
