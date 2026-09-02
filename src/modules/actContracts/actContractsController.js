@@ -601,33 +601,24 @@ exports.createDeposito = async (req, res) => {
     const { NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal } = req.body;
 
     try {
-        const sql = `
+        // 1. Insertar el depósito normal
+        const sqlInsert = `
             INSERT INTO Depositos (
-                NoContrato, 
-                NuCedula, 
-                NoRecibo, 
-                Fecha, 
-                TipoOperacion, 
-                TxBanco, 
-                NuDeposito, 
-                MnDeposito, 
-                CodUser, 
-                CodSucursal
-            ) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
-        const [rows] = await db.query(sql, [
-            NoContrato, 
-            NuCedula, 
-            NoRecibo, 
-            Fecha, 
-            TipoOperacion, 
-            TxBanco, 
-            NuDeposito, 
-            MnDeposito, 
-            CodUser, 
-            CodSucursal
+        const [rows] = await db.query(sqlInsert, [
+            NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal
         ]);
+
+        // 2. Asignar MnInicial al contrato ÚNICAMENTE si está nulo
+        const sqlUpdateContrato = `
+            UPDATE deactosgrados 
+            SET MnInicial = ? 
+            WHERE NoContrato = ?
+        `;
+        await db.query(sqlUpdateContrato, [MnDeposito, NoContrato]);
+
         res.status(201).json({ 
             status: 'success', 
             message: 'Depósito registrado correctamente',
@@ -642,7 +633,6 @@ exports.createDeposito = async (req, res) => {
         });
     }
 }
-
 exports.updateTotals = async (req, res) => {
     const { CodigoActo, NuCedula } = req.params;
     const { MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial } = req.body;
