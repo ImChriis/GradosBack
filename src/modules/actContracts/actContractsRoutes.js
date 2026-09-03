@@ -10,7 +10,7 @@ router.get('/:CodigoActo/totalPaid', actContractsController.totalPaid);
 router.get('/:CodigoActo/saldo', actContractsController.saldo);
 router.get('/:CodigoActo/usersAmount', actContractsController.getActUsersAmount);
 router.get('/:CodigoActo/:NuCedula/:NoContrato', actContractsController.getPaymentDataByContract);
-router.get('/:NoContrato', actContractsController.getRecibosByUserContract);
+router.get('/:NoContrato/:NuCedula', actContractsController.getRecibosByUserContract);
 router.post('/recalculateTotal', actContractsController.recalculateActTotal);
 router.post('/addUser', actContractsController.addUserToAct);
 router.post('/removeUser/:CodigoActo/:NuCedula', actContractsController.removeUserFromAct);

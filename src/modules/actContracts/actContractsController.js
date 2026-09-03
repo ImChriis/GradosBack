@@ -498,7 +498,7 @@ exports.getPaymentDataByContract = async (req, res) => {
 }
 
 exports.getRecibosByUserContract = async (req, res) => {
-    const { NoContrato } = req.params;
+    const { NoContrato, NuCedula } = req.params;
 
     if(!NoContrato){
         return res.status(400).json({
@@ -507,9 +507,16 @@ exports.getRecibosByUserContract = async (req, res) => {
         })
     }
 
+    if(!NuCedula){
+        return res.status(400).json({
+            status: 'error',
+            message: "Falta el parámetro NuCedula"
+        })
+    }
+    
     try{
-        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec FROM ReciboPago WHERE NoContrato = ? ORDER BY NoRecibo`;
-        const [rows] = await db.execute(sql, [NoContrato]);
+        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec FROM ReciboPago WHERE NoContrato = ? AND NuCedula = ? ORDER BY NoRecibo`;
+        const [rows] = await db.execute(sql, [NoContrato, NuCedula]);
 
         if(rows.length === 0){
             return res.status(404).json({
