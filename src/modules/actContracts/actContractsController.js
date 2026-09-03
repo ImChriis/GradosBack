@@ -558,39 +558,68 @@ exports.getAbonosByUserContract = async (req, res) => {
 };
 
 exports.createReciboPago = async (req, res) => {
-    // Extraemos los datos del body (vienen desde tu formulario en Angular)
     const { 
         NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
         tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
         Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan
     } = req.body;
 
-    try {
-        // Limpiamos strings por seguridad (como en tu ejemplo anterior)
-        const reciboId = String(NoRecibo).trim();
-        const contratoId = String(NoContrato).trim();
-        const cedulaId = String(NuCedula).trim();
+    const connection = await db.getConnection();
 
-        const sql = `INSERT INTO ReciboPago (
-                        NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
-                        tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
-                        Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan
-                    ) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    try {
+        await connection.beginTransaction();
+
+        // 1. Bloquear y obtener el consecutivo actual de 'configuracion' (Garantiza acceso atómico)
+        const [configRows] = await connection.query(
+            'SELECT NoRecibo FROM configuracion FOR UPDATE'
+        );
+
+        if (configRows.length === 0) {
+            await connection.rollback();
+            connection.release();
+            return res.status(500).json({ status: 'error', message: 'No se encontró el registro de configuración.' });
+        }
+
+        const correlativoConfig = Number(configRows[0].NoRecibo);
+        let reciboIdFinal = Number(NoRecibo) || correlativoConfig;
+
+        // 2. Verificar si el NoRecibo deseado ya existe en ReciboPago
+        const [existing] = await connection.query(
+            'SELECT NoRecibo FROM ReciboPago WHERE NoRecibo = ?',
+            [reciboIdFinal]
+        );
+
+        // Si ya existe, calculamos automáticamente el máximo número real guardado en la tabla de Recibos
+        if (existing.length > 0) {
+            const [maxRows] = await connection.query(
+                'SELECT MAX(NoRecibo) AS maxRecibo FROM ReciboPago FOR UPDATE'
+            );
+            const maxActual = maxRows[0].maxRecibo ? Number(maxRows[0].maxRecibo) : correlativoConfig;
+            
+            // Asignamos el mayor entre el consecutivo de configuracion y el maximo de la BD + 1
+            reciboIdFinal = Math.max(correlativoConfig, maxActual + 1);
+        }
+
+        // 3. Insertar el recibo con el NoRecibo asignado
+        const sqlInsert = `INSERT INTO ReciboPago (
+                            NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, 
+                            tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser, 
+                            Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan
+                        ) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         
-        // Pasamos los valores en el orden exacto de los '?'
-        const [result] = await db.query(sql, [
-            NoRecibo, 
-            ferecibo, // La fecha que viene del frontend
-            cedulaId, 
+        await connection.query(sqlInsert, [
+            reciboIdFinal, 
+            ferecibo, 
+            String(NuCedula).trim(), 
             CodSucursal, 
-            contratoId, 
+            String(NoContrato).trim(), 
             tprecibo, 
             mnrecibo, 
             mnsaldorec, 
             TxConcepRec, 
             CodUser, 
-            Anulado ? 1 : 0, // Convertimos boolean a 1/0 para la DB
+            Anulado ? 1 : 0, 
             Tipo, 
             CodigoActo,
             MaFormPag,
@@ -598,22 +627,38 @@ exports.createReciboPago = async (req, res) => {
             NuRefDocBan
         ]);
 
-        const sql2 = 'UPDATE configuracion SET NoRecibo = ?';
-        await db.execute(sql2, [reciboId]);
+        // 4. Actualizar SIEMPRE 'configuracion' con el nuevo correlativo disponible (+1)
+        const proximoCorrelativo = reciboIdFinal + 1;
+        await connection.execute('UPDATE configuracion SET NoRecibo = ?', [proximoCorrelativo]);
 
-        // Si se insertó correctamente, devolvemos el éxito
-        res.status(201).json({ 
+        await connection.commit();
+        connection.release();
+
+        return res.status(201).json({ 
             status: 'success', 
             message: 'Recibo creado correctamente',
-            affectedRows: result.affectedRows 
+            noRecibo: reciboIdFinal,
+            proximoCorrelativo: proximoCorrelativo
         });
 
     } catch (error) {
+        await connection.rollback();
+        connection.release();
+
+        // Control de respaldo por si ocurre una colisión inesperada de Unique Key
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({
+                status: 'error',
+                code: 'RECIBO_DUPLICADO',
+                message: `El número de recibo ya se encuentra registrado. Intenta nuevamente.`,
+                sugerido: Number(NoRecibo) + 1
+            });
+        }
+
         console.error("Error al insertar el recibo:", error);
-        res.status(500).json({ 
+        return res.status(500).json({ 
             status: 'error',
-            message: "Error interno al intentar guardar el recibo",
-            details: error.message 
+            message: "Error interno al intentar guardar el recibo"
         });
     }
 };
