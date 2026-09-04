@@ -1222,12 +1222,13 @@ exports.sendReciboEmail = async (req, res) => {
     }
 
     try {
-        // 2. Consulta de datos
+        // 2. Consulta de datos del recibo (incluyendo CodigoActo)
         const [reciboRows] = await db.query(`
             SELECT
                 r.NoRecibo,
                 r.FeRecibo,
                 r.NuCedula,
+                r.CodigoActo,
                 c.txnombre AS nombreCliente,
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
@@ -1247,6 +1248,24 @@ exports.sendReciboEmail = async (req, res) => {
         }
 
         const recibo = reciboRows[0];
+
+        // Consulta de Título y Especialidad desde actosgrados
+        let tituloActo = 'N/A';
+        let especialidadActo = 'N/A';
+
+        if (recibo.CodigoActo) {
+            const [actoRows] = await db.query(`
+                SELECT Titulo, Especialidad 
+                FROM actosgrados 
+                WHERE CodigoActo = ? 
+                LIMIT 1
+            `, [recibo.CodigoActo]);
+
+            if (actoRows.length > 0) {
+                if (actoRows[0].Titulo) tituloActo = actoRows[0].Titulo;
+                if (actoRows[0].Especialidad) especialidadActo = actoRows[0].Especialidad;
+            }
+        }
 
         const [depositosRows] = await db.query(`
             SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito
@@ -1391,6 +1410,8 @@ exports.sendReciboEmail = async (req, res) => {
                 drawRow('Fecha Recibo:', formatDate(recibo.FeRecibo));
                 drawRow('No. Cédula:', recibo.NuCedula);
                 drawWrappedRow('Nombre Cliente:', recibo.nombreCliente);
+                drawWrappedRow('Título a Recibir:', tituloActo);
+                drawWrappedRow('Especialidad:', especialidadActo);
                 drawWrappedRow('Motivo:', recibo.Motivo);
                 drawRow('Monto Pagado:', formatMoney(recibo.MnPagado));
 
@@ -1430,20 +1451,25 @@ exports.sendReciboEmail = async (req, res) => {
         });
 
         // 4. Configurar el servicio de envío de correos (Nodemailer)
+        const appEmail = process.env.EMAIL_USER || 'pago.odontologia@gmail.com';
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
-                user: process.env.EMAIL_USER || 'pago.odontologia@gmail.com',
+                user: appEmail,
                 pass: process.env.EMAIL_PASS || 'mzkw potk odbv otjx'
             }
         });
 
-        // 5. Opciones del correo electrónico
-        const mailOptions = {
+        // 5. Correo para el cliente (CON PDF ADJUNTO)
+        const mailOptionsCliente = {
             from: '"Grado\'s de Venezuela" <info.gradosdevzla@gmail.com>',
             to: emailCliente,
             subject: `Comprobante de Pago - Recibo N° ${recibo.NoRecibo}`,
-            text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\nAdjunto a este correo encontrará su recibo de pago N° ${recibo.NoRecibo}.\n\nAtentamente,\nGrado's de Venezuela, C.A.`,
+            text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\n` +
+                  `Adjunto a este correo encontrará su recibo de pago N° ${recibo.NoRecibo}.\n\n` +
+                  `Título a Recibir: ${tituloActo}\n` +
+                  `Especialidad: ${especialidadActo}\n\n` +
+                  `Atentamente,\nGrado's de Venezuela, C.A.`,
             attachments: [
                 {
                     filename: `recibo-${recibo.NoRecibo}.pdf`,
@@ -1453,12 +1479,38 @@ exports.sendReciboEmail = async (req, res) => {
             ]
         };
 
-        // 6. Enviar el correo
-        await transporter.sendMail(mailOptions);
+        // 6. Correo para la Aplicación / Administración (SIN ADJUNTO)
+        const mailOptionsApp = {
+            from: '"Grado\'s de Venezuela - Sistema" <info.gradosdevzla@gmail.com>',
+            to: appEmail,
+            subject: `[Notificación de Envío] Recibo N° ${recibo.NoRecibo} enviado a ${emailCliente}`,
+            text: `NOTIFICACIÓN DE ENVÍO DE RECIBO\n\n` +
+                  `Se ha enviado exitosamente el recibo por correo electrónico.\n\n` +
+                  `--- DETALLES DEL ENVÍO ---\n` +
+                  `Destinatario (Correo Cliente): ${emailCliente}\n` +
+                  `Cliente: ${recibo.nombreCliente || 'N/A'}\n` +
+                  `Cédula: ${recibo.NuCedula || 'N/A'}\n` +
+                  `No. Recibo: ${recibo.NoRecibo}\n` +
+                  `No. Contrato: ${recibo.NoContrato || 'N/A'}\n` +
+                  `Título a Recibir: ${tituloActo}\n` +
+                  `Especialidad: ${especialidadActo}\n` +
+                  `Motivo: ${recibo.Motivo || 'N/A'}\n` +
+                  `Monto Pagado: ${recibo.MnPagado}\n` +
+                  `Saldo Restante: ${recibo.MnSaldo}\n` +
+                  `Enviado por Usuario: ${usuarioReporte || 'Sistema'}\n` +
+                  `Fecha de Envío: ${new Date().toLocaleString('es-VE')}\n\n` +
+                  `Este correo es un registro automático de auditoría sin archivo adjunto.`
+        };
+
+        // 7. Enviar ambos correos simultáneamente
+        await Promise.all([
+            transporter.sendMail(mailOptionsCliente),
+            transporter.sendMail(mailOptionsApp)
+        ]);
 
         return res.status(200).json({
             status: 'success',
-            message: `Recibo enviado exitosamente a ${emailCliente}`
+            message: `Recibo enviado exitosamente a ${emailCliente} y copia de control registrada`
         });
 
     } catch (error) {
