@@ -1118,7 +1118,7 @@ exports.actListPdf = async (req, res) => {
         };
 
         // 3. Consultar la tabla dinámica (He corregido el FROM para usar la variable dinámica)
-        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados ORDER BY Nombre ASC`);
+        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados WHERE CodigoActo = ? ORDER BY Nombre ASC`, [CodigoActo]);
 
         addHeader(doc, logoPath, usuarioReporte, tituloActo, CodigoActo);
 
@@ -1206,7 +1206,7 @@ exports.actListExcel = async (req, res) => {
         const fullTitle = `LISTA DE GRADUANDOS - ${CodigoActo} - ${tituloActo || ''}`.toUpperCase();
 
         // FIX: Usar la tabla dinámica correcta
-        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados ORDER BY Nombre ASC`);
+        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados WHERE CodigoActo = ? ORDER BY Nombre ASC`, [CodigoActo]);
 
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Lista de Graduandos');
@@ -1374,7 +1374,7 @@ exports.actListTxt = async (req, res) => {
         const tituloActo = tituloRes[0].Titulo;
         
         // 2. Obtener graduandos
-        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados ORDER BY Nombre ASC`);
+        const [graduandos] = await db.query(`SELECT Nombre FROM deactosgrados WHERE CodigoActo = ? ORDER BY Nombre ASC`, [CodigoActo]);
 
         // 3. Construir el contenido siguiendo el formato exacto
         let content = "";

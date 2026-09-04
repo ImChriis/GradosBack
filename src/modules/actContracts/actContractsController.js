@@ -40,7 +40,7 @@ exports.getActsUsersByCodigoActo = async (req, res) => {
     FROM deactosgrados d
     INNER JOIN clientes c ON c.NuCedula = d.NuCedula
     WHERE d.CodigoActo = ?
-    ORDER BY d.Nombre ASC;`;
+    ORDER BY d.NoContrato DESC;`;
             const [rows] = await db.query(sql, [CodigoActo]);
             res.json(rows);
         }catch (error){
@@ -1433,8 +1433,8 @@ exports.sendReciboEmail = async (req, res) => {
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
-                user: process.env.EMAIL_USER || 'vitalsense2025@gmail.com',
-                pass: process.env.EMAIL_PASS || 'ecub jsrn xyct dcne'
+                user: process.env.EMAIL_USER || 'pago.odontologia@gmail.com',
+                pass: process.env.EMAIL_PASS || 'mzkw potk odbv otjx'
             }
         });
 
@@ -1698,8 +1698,8 @@ exports.sendReciboEmailOnePage = async (req, res) => {
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
-                user: process.env.EMAIL_USER || 'vitalsense2025@gmail.com',
-                pass: process.env.EMAIL_PASS || 'ecub jsrn xyct dcne'
+                user: process.env.EMAIL_USER || 'pago.odontologia@gmail.com',
+                pass: process.env.EMAIL_PASS || 'mzkw potk odbv otjx'
             }
         });
 
