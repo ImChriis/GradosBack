@@ -70,7 +70,7 @@ exports.updateClient = async (req, res) => {
     }
 
     try {
-        // Cambiamos SELECT id por SELECT TxNombre para obtener la persona en uso
+        // Validar si la cédula ya pertenece a otro cliente
         const [existingClient] = await db.execute(
             'SELECT TxNombre FROM clientes WHERE NuCedula = ? AND id <> ?',
             [nucedula, id]
@@ -92,12 +92,26 @@ exports.updateClient = async (req, res) => {
             return res.status(404).json({ error: 'Client not found' });
         }
 
-        const sql = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ? WHERE id = ?'; 
-        await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, id]);
+        // Iniciar transacción
+        await db.query('START TRANSACTION');
 
-        return res.json({ message: 'Client updated successfully' });
+        // 1. Actualizar tabla clientes
+        const sqlClient = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ? WHERE id = ?'; 
+        await db.query(sqlClient, [nucedula, txnombre, txdireccion, txcelular, txemail, id]);
+
+        // 2. Actualizar Nombre y TxContacto en deactosgrados para la misma cédula
+        const sqlActos = 'UPDATE deactosgrados SET Nombre = ?, TxContacto = ? WHERE NuCedula = ?';
+        await db.query(sqlActos, [txnombre, txcelular, nucedula]);
+
+        // Confirmar transacción
+        await db.query('COMMIT');
+
+        return res.json({ message: 'Client and related records updated successfully' });
 
     } catch (error) {
+        // Revertir en caso de error
+        await db.query('ROLLBACK');
+
         console.error('Error updating client:', error);
 
         if (error.code === 'ER_DUP_ENTRY') {
