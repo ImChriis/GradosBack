@@ -3,6 +3,18 @@ const path = require('path');
 const nodemailer = require('nodemailer');
 const db = require('../../config/db');
 
+const getFechaHoraVenezuela = () => {
+    const ahora = new Date();
+    const fechaActual = ahora.toLocaleDateString('es-VE', { timeZone: 'America/Caracas' });
+    const horaActual = ahora.toLocaleTimeString('es-VE', { 
+        timeZone: 'America/Caracas', 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: true 
+    });
+    return { fechaActual, horaActual };
+};
+
 exports.getActs = async (req, res) => {
     try{
        const sql = `
@@ -793,12 +805,7 @@ exports.printReciboPdf = async (req, res) => {
             .text("Grado`s de Venezuela, C.A.", 68, 20)
             .font('Helvetica').text("J-30591547-4", 68, 30);
 
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-        });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         doc.fontSize(7).font('Helvetica')
             .text(`Fecha: ${fechaActual}`, 220, 18, { align: 'right', width: 156, lineBreak: false })
@@ -1032,13 +1039,8 @@ exports.printReciboPdfOnePage = async (req, res) => {
         doc.fontSize(8).font('Helvetica-Bold')
             .text("Grado`s de Venezuela, C.A.", 85, startY + 20)
             .font('Helvetica').text("J-30591547-4", 85, startY + 31);
-
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-        });
+        
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         doc.fontSize(7.5).font('Helvetica')
             .text(`Fecha: ${fechaActual}`, 420, startY + 18, { align: 'right', width: 164, lineBreak: false })

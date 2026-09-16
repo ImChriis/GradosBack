@@ -1,5 +1,19 @@
 const db = require('../../config/db');
 
+const getFechaHoraVenezuela = () => {
+    const ahora = new Date();
+    const fechaActual = ahora.toLocaleDateString('es-VE', { timeZone: 'America/Caracas' });
+    const horaActual = ahora.toLocaleTimeString('es-VE', { 
+        timeZone: 'America/Caracas', 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: true 
+    });
+    
+    // Retorna el string directo "16/9/2026 12:47 PM"
+    return `${fechaActual} ${horaActual}`;
+};
+
 exports.getClients = async (req, res) => {
     try{
         const sql = 'SELECT * From clientes';
@@ -12,7 +26,7 @@ exports.getClients = async (req, res) => {
 }
 
 exports.addClient = async (req, res) => {
-    const { nucedula, txnombre, txdireccion, txcelular, txemail } = req.body;
+    const { nucedula, txnombre, txdireccion, txcelular, txemail, CodUser } = req.body;
 
     if (!nucedula || !txnombre) {
         return res.status(400).json({
@@ -31,13 +45,11 @@ exports.addClient = async (req, res) => {
             });
         }
 
-        const [result] = await db.execute(
-            'SELECT COALESCE(MAX(CodUser), 0) + 1 AS nextCodUser FROM clientes'
-        );
-        const nextCodUser = result[0].nextCodUser;
+        
+       const feingreso =  getFechaHoraVenezuela(); 
 
-        const sql = "INSERT INTO clientes (NuCedula, TxNombre, TxDireccion, TxCelular, TxEmail, CodUser) VALUES (?, ?, ?, ?, ?, ?)";
-        const [rows] = await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, nextCodUser]);
+        const sql = "INSERT INTO clientes (NuCedula, TxNombre, TxDireccion, TxCelular, TxEmail, feingreso, CodUser) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        const [rows] = await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, feingreso, CodUser]);
 
         res.status(201).json({ 
             message: 'Client added successfully',
@@ -57,7 +69,7 @@ exports.addClient = async (req, res) => {
 
 exports.updateClient = async (req, res) => {
     const { id } = req.params;
-    const { nucedula, txnombre, txdireccion, txcelular, txemail } = req.body || {};
+    const { nucedula, txnombre, txdireccion, txcelular, txemail, CodUser } = req.body || {};
 
     if (!id) {
         return res.status(400).json({ error: 'Client ID is required' });
@@ -96,8 +108,8 @@ exports.updateClient = async (req, res) => {
         await db.query('START TRANSACTION');
 
         // 1. Actualizar tabla clientes
-        const sqlClient = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ? WHERE id = ?'; 
-        await db.query(sqlClient, [nucedula, txnombre, txdireccion, txcelular, txemail, id]);
+        const sqlClient = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ?, CodUser = ? WHERE id = ?'; 
+        await db.query(sqlClient, [nucedula, txnombre, txdireccion, txcelular, txemail, CodUser, id]);
 
         // 2. Actualizar Nombre y TxContacto en deactosgrados para la misma cédula
         const sqlActos = 'UPDATE deactosgrados SET Nombre = ?, TxContacto = ? WHERE NuCedula = ?';

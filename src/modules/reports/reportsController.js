@@ -3,6 +3,18 @@ const ExcelJS = require('exceljs');
 const path = require('path');
 const db = require('../../config/db');
 
+const getFechaHoraVenezuela = () => {
+    const ahora = new Date();
+    const fechaActual = ahora.toLocaleDateString('es-VE', { timeZone: 'America/Caracas' });
+    const horaActual = ahora.toLocaleTimeString('es-VE', { 
+        timeZone: 'America/Caracas', 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: true 
+    });
+    return { fechaActual, horaActual };
+};
+
 exports.specialitiesPdf = async (req, res) => {
     const { usuarioReporte } = req.params;
 
@@ -29,8 +41,8 @@ exports.specialitiesPdf = async (req, res) => {
             .text("Grado`s de Venezuela, C.A.", 130, 40)
             .font('Helvetica').text("J-30591547-4", 130, 52);
 
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+       // Obtención de fecha y hora ajustada a Venezuela
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         doc.fontSize(8).font('Helvetica')
             .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
@@ -143,9 +155,9 @@ exports.specialitiesExcel = async (req, res) => {
         empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
         empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
         empresaCell.font = { name: 'Arial', bold: true, size: 9 };
-
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+        
         const metaCell = worksheet.getCell('C2'); // Movido a C porque ya no hay D
         metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
         metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
@@ -240,8 +252,7 @@ exports.institutionsPdf = async (req, res) => {
             .text("Grado`s de Venezuela, C.A.", 130, 40)
             .font('Helvetica').text("J-30591547-4", 130, 52);
 
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         doc.fontSize(8).font('Helvetica')
             .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
@@ -373,8 +384,8 @@ exports.institutionsExcel = async (req, res) => {
         empresaCell.font = { name: 'Arial', bold: true, size: 9 };
 
         // 3. Metadatos
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+        
         const metaCell = worksheet.getCell('D2');
         metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
         metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
@@ -485,8 +496,7 @@ exports.actPlacesPdf = async (req, res) => {
             .text("Grado`s de Venezuela, C.A.", 130, 40)
             .font('Helvetica').text("J-30591547-4", 130, 52);
 
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         doc.fontSize(8).font('Helvetica')
             .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
@@ -628,8 +638,7 @@ exports.actPlacesExcel = async (req, res) => {
         empresaCell.font = { name: 'Arial', bold: true, size: 9 };
 
         // 3. METADATOS (Fecha, Hora, Usuario a la derecha)
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         const metaCell = worksheet.getCell('D2');
         metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
@@ -770,8 +779,7 @@ exports.clientsPdf = async (req, res) => {
             .text("Grado`s de Venezuela, C.A.", 130, 40)
             .font('Helvetica').text("J-30591547-4", 130, 52);
 
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         doc.fontSize(8).font('Helvetica')
             .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
@@ -921,8 +929,7 @@ exports.clientsExcel = async (req, res) => {
         empresaCell.font = { name: 'Arial', bold: true, size: 9 };
 
         // 3. METADATOS (A la derecha en la última columna seleccionada)
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
         const metaCell = worksheet.getCell(`${lastColChar}2`);
         metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
@@ -1088,8 +1095,7 @@ exports.actListPdf = async (req, res) => {
                 .text("Grado`s de Venezuela, C.A.", 130, 40)
                 .font('Helvetica').text("J-30591547-4", 130, 52);
 
-            const fechaActual = new Date().toLocaleDateString('es-VE');
-            const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+            const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
             doc.fontSize(8).font('Helvetica')
                 .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
@@ -1250,8 +1256,7 @@ exports.actListExcel = async (req, res) => {
         empresaCell.font = { name: 'Arial', bold: true, size: 9 };
 
         // 5. METADATOS (Derecha)
-        const fechaActual = new Date().toLocaleDateString('es-VE');
-        const horaActual = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
         
         worksheet.mergeCells('D2:E2');
         const metaCell = worksheet.getCell('D2');
@@ -1557,8 +1562,7 @@ exports.generateClosingPdf = async (req, res) => {
                 .text("Grado`s de Venezuela, C.A.", 130, 40)
                 .font('Helvetica').text("J-30591547-4", 130, 52);
 
-            const fechaImpresion = fechaHoy.toLocaleDateString('es-VE');
-            const horaActual = fechaHoy.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true });
+            const { fechaImpresion, horaActual } = getFechaHoraVenezuela();
 
             doc.fontSize(8).font('Helvetica')
                 .text(`Fecha Impresión: ${fechaImpresion}`, 350, 40, { align: 'right' })
