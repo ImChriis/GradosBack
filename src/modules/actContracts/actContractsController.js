@@ -1322,12 +1322,7 @@ exports.sendReciboEmail = async (req, res) => {
                     .text("Grado`s de Venezuela, C.A.", 80, 24)
                     .font('Helvetica').text("J-30591547-4", 80, 35);
 
-                const fechaActual = new Date().toLocaleDateString('es-VE');
-                const horaActual = new Date().toLocaleTimeString('es-VE', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true
-                });
+             const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
                 doc.fontSize(7.5).font('Helvetica')
                     .text(`Fecha: ${fechaActual}`, 230, 22, { align: 'right', width: 138 })
@@ -1620,12 +1615,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
                     .text("Grado`s de Venezuela, C.A.", 80, startY + 4)
                     .font('Helvetica').text("J-30591547-4", 80, startY + 15);
 
-                const fechaActual = new Date().toLocaleDateString('es-VE');
-                const horaActual = new Date().toLocaleTimeString('es-VE', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true
-                });
+            const { fechaActual, horaActual } = getFechaHoraVenezuela();
 
                 doc.fontSize(7).font('Helvetica')
                     .text(`Fecha: ${fechaActual}`, 420, startY + 2, { align: 'right', width: 164 })
