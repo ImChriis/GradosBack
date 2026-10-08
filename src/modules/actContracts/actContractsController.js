@@ -15,6 +15,15 @@ const getFechaHoraVenezuela = () => {
     return { fechaActual, horaActual };
 };
 
+const EMAIL_USER = 'Gradosdevzla.pagos@gmail.com';
+const EMAIL_PASS = 'dmoo ywfm jagk piaw';
+const EMAIL_FROM = '"Grado\'s de Venezuela" <gradosdevzla.pagos@gmail.com>';
+
+const createMailTransporter = () => nodemailer.createTransport({
+service: 'gmail',
+    auth: { user: EMAIL_USER, pass: EMAIL_PASS }
+});
+
 exports.getActs = async (req, res) => {
     try{
        const sql = `
@@ -1448,18 +1457,12 @@ exports.sendReciboEmail = async (req, res) => {
         });
 
         // 4. Configurar el servicio de envío de correos (Nodemailer)
-        const appEmail = process.env.EMAIL_USER || 'pago.odontologia@gmail.com';
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: appEmail,
-                pass: process.env.EMAIL_PASS || 'mzkw potk odbv otjx'
-            }
-        });
+        const appEmail = EMAIL_USER;
+        const transporter = createMailTransporter();
 
         // 5. Correo para el cliente (CON PDF ADJUNTO)
         const mailOptionsCliente = {
-            from: '"Grado\'s de Venezuela" <info.gradosdevzla@gmail.com>',
+            from: EMAIL_FROM,
             to: emailCliente,
             subject: `Comprobante de Pago - Recibo N° ${recibo.NoRecibo}`,
             text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\n` +
@@ -1478,7 +1481,7 @@ exports.sendReciboEmail = async (req, res) => {
 
         // 6. Correo para la Aplicación / Administración (SIN ADJUNTO)
         const mailOptionsApp = {
-            from: '"Grado\'s de Venezuela - Sistema" <info.gradosdevzla@gmail.com>',
+            from: EMAIL_FROM,
             to: appEmail,
             subject: `[Notificación de Envío] Recibo N° ${recibo.NoRecibo} enviado a ${emailCliente}`,
             text: `NOTIFICACIÓN DE ENVÍO DE RECIBO\n\n` +
@@ -1739,16 +1742,10 @@ exports.sendReciboEmailOnePage = async (req, res) => {
             doc.end();
         });
 
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER || 'pago.odontologia@gmail.com',
-                pass: process.env.EMAIL_PASS || 'mzkw potk odbv otjx'
-            }
-        });
+        const transporter = createMailTransporter();
 
         const mailOptions = {
-            from: '"Grado\'s de Venezuela" <info.gradosdevzla@gmail.com>',
+            from: EMAIL_FROM,
             to: emailCliente,
             subject: `Comprobante de Pago - Recibo N° ${recibo.NoRecibo}`,
             text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\nAdjunto a este correo encontrará su recibo de pago N° ${recibo.NoRecibo}.\n\nAtentamente,\nGrado's de Venezuela, C.A.`,
