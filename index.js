@@ -14,6 +14,7 @@ const usersRoutes = require('./src/modules/users/usersRoutes');
 const reportsRoutes = require('./src/modules/reports/reportsRoutes');
 const backupRoutes = require('./src/modules/backup/backupRoutes');
 const ringContractRoutes = require('./src/modules/ringContracts/ringContractRoutes');
+const auditRoutes = require('./src/modules/audit/auditRoutes');
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use('/users', usersRoutes);
 app.use('/reports', reportsRoutes);
 app.use('/backup', backupRoutes);
 app.use('/ringContracts', ringContractRoutes);
+app.use('/audit', auditRoutes);
 
 //Desarrollo
 app.listen(3000, () => {
