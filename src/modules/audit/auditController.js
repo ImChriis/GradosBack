@@ -77,7 +77,7 @@ exports.getAudit = async (req, res) => {
         const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 20));
         const offset = (page - 1) * limit;
 
-        // El JOIN es obligatorio acá: whereSql puede referenciar usuarios.Nombre
+        // El JOIN usa CodUser exactamente como en la tabla auditoria_general
         const [[{ total }]] = await db.query(
             `SELECT COUNT(*) AS total
              FROM auditoria_general
