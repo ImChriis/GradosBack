@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getMetodoPagos = async (req, res) => {
     try {
@@ -20,7 +21,14 @@ exports.createMetodoPago = async (req, res) => {
 
     try{
         const sql = `INSERT INTO MetodoPago (NombreMetodoPago, Status) VALUES (?, ?)`;
-        await db.query(sql, [nombreMetodoPago, status]);
+        const [rows] = await db.query(sql, [nombreMetodoPago, status]);
+
+        audit.auditarInsert({
+            tabla: 'metodopago',
+            idRegistro: rows.insertId,
+            datos: { NombreMetodoPago: nombreMetodoPago, Status: status }
+        });
+
         res.status(201).json({ message: "Registro Guardado Satisfactoriamente!!!" });
     } catch (error) {
         console.error('Error creating payment method:', error);
@@ -37,11 +45,21 @@ exports.updateMetodoPago = async (req, res) => {
     }
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM metodopago WHERE idMetodoPago = ?', [idMetodoPago]);
+
         const sql = `UPDATE MetodoPago SET NombreMetodoPago = ?, Status = ? WHERE idMetodoPago = ?`;
         const [result] = await db.query(sql, [nombreMetodoPago, status, idMetodoPago]);
         if(result.affectedRows === 0){
             return res.status(404).json({ message: "Método de pago no encontrado para actualizar" });
         }
+
+        audit.auditarUpdate({
+            tabla: 'metodopago',
+            idRegistro: idMetodoPago,
+            antes,
+            despues: { NombreMetodoPago: nombreMetodoPago, Status: status }
+        });
+
         res.json({ message: "Registro Actualizado Satisfactoriamente!!!" });
     } catch (error) {
         console.error('Error updating payment method:', error);

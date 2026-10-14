@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 const getFechaHoraVenezuela = () => {
     const ahora = new Date();
@@ -50,6 +51,12 @@ exports.addClient = async (req, res) => {
 
         const sql = "INSERT INTO clientes (NuCedula, TxNombre, TxDireccion, TxCelular, TxEmail, feingreso, CodUser) VALUES (?, ?, ?, ?, ?, ?, ?)";
         const [rows] = await db.query(sql, [nucedula, txnombre, txdireccion, txcelular, txemail, feingreso, CodUser]);
+
+        audit.auditarInsert({
+            tabla: 'clientes',
+            idRegistro: rows.insertId,
+            datos: { nucedula, txnombre, txdireccion, txcelular, txemail, feingreso, CodUser }
+        });
 
         res.status(201).json({ 
             message: 'Client added successfully',
@@ -107,16 +114,40 @@ exports.updateClient = async (req, res) => {
         // Iniciar transacción
         await db.query('START TRANSACTION');
 
+        // Datos anteriores para la auditoría (cliente + actos relacionados)
+        const antesCliente = await audit.antesDe('SELECT * FROM clientes WHERE id = ?', [id]);
+        const [antesActos] = await db.query('SELECT * FROM deactosgrados WHERE NuCedula = ?', [nucedula]);
+
         // 1. Actualizar tabla clientes
         const sqlClient = 'UPDATE clientes SET NuCedula = ?, TxNombre = ?, TxDireccion = ?, TxCelular = ?, TxEmail = ?, CodUser = ? WHERE id = ?'; 
         await db.query(sqlClient, [nucedula, txnombre, txdireccion, txcelular, txemail, CodUser, id]);
 
         // 2. Actualizar Nombre y TxContacto en deactosgrados para la misma cédula
         const sqlActos = 'UPDATE deactosgrados SET Nombre = ?, TxContacto = ? WHERE NuCedula = ?';
-        await db.query(sqlActos, [txnombre, txcelular, nucedula]);
+        const [resActos] = await db.query(sqlActos, [txnombre, txcelular, nucedula]);
 
         // Confirmar transacción
         await db.query('COMMIT');
+
+        // Auditoría (una fila por acto afectado, como lo haría un trigger)
+        audit.auditarUpdate({
+            tabla: 'clientes',
+            idRegistro: id,
+            antes: antesCliente,
+            despues: { NuCedula: nucedula, TxNombre: txnombre, TxDireccion: txdireccion, TxCelular: txcelular, TxEmail: txemail, CodUser }
+        });
+
+        if (resActos.affectedRows > 0) {
+            for (const acto of antesActos) {
+                audit.auditarUpdate({
+                    tabla: 'deactosgrados',
+                    idRegistro: acto.id,
+                    antes: acto,
+                    despues: { Nombre: txnombre, Txcontacto: txcelular },
+                    CodUser
+                });
+            }
+        }
 
         return res.json({ message: 'Client and related records updated successfully' });
 
@@ -171,6 +202,12 @@ exports.deleteClient = async (req, res) => {
 
         const client = existingClient[0];
 
+        // Datos anteriores para la auditoría (se registran dentro de la transacción)
+        const [antesActos] = await connection.query('SELECT * FROM deactosgrados WHERE NuCedula = ?', [client.NuCedula]);
+        const [antesDepositos] = await connection.query('SELECT * FROM depositos WHERE NuCedula = ?', [client.NuCedula]);
+        const [antesRecibos] = await connection.query('SELECT * FROM recibopago WHERE NuCedula = ?', [client.NuCedula]);
+        const [antesCliente] = await connection.query('SELECT * FROM clientes WHERE id = ?', [client.id]);
+
         // 2. Iniciar la Transacción
         await connection.beginTransaction();
 
@@ -181,6 +218,20 @@ exports.deleteClient = async (req, res) => {
 
         // 4. Eliminar el registro en la tabla principal de clientes usando su id
         await connection.query('DELETE FROM clientes WHERE id = ?', [client.id]);
+
+        // Auditoría: una fila por registro eliminado (va en la misma transacción)
+        for (const fila of antesActos) {
+            audit.auditarDelete({ tabla: 'deactosgrados', idRegistro: fila.id, datos: fila, conn: connection });
+        }
+        for (const fila of antesDepositos) {
+            audit.auditarDelete({ tabla: 'depositos', idRegistro: fila.id, datos: fila, conn: connection });
+        }
+        for (const fila of antesRecibos) {
+            audit.auditarDelete({ tabla: 'recibopago', idRegistro: fila.id, datos: fila, conn: connection });
+        }
+        for (const fila of antesCliente) {
+            audit.auditarDelete({ tabla: 'clientes', idRegistro: fila.id, datos: fila, conn: connection });
+        }
 
         // 5. Confirmar transacción y liberar la conexión
         await connection.commit();

@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getBanks = async (req, res) => {
     try{
@@ -22,6 +23,12 @@ exports.addBank = async (req, res) => {
         const sql = 'INSERT INTO bancos (bancos, codigo, status) VALUES (?, ?, ?)';
         const [rows] = await db.query(sql, [bancos, codigo, status]);
 
+        audit.auditarInsert({
+            tabla: 'bancos',
+            idRegistro: rows.insertId,
+            datos: { bancos, codigo, status }
+        });
+
         res.status(201).json({
             message: 'Bank added successfully',
             bankId: rows.insertId
@@ -41,12 +48,21 @@ exports.updateBank = async (req, res) => {
     }
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM bancos WHERE id = ?', [id]);
+
         const sql = 'UPDATE bancos SET bancos = ?, codigo = ?, status = ? WHERE id = ?';
         const [rows] = await db.query(sql, [bancos, codigo, status, id]);
         
         if(rows.affectedRows === 0){
             return res.status(404).json({ error: 'Bank not found or no changes made' });
         }
+
+        audit.auditarUpdate({
+            tabla: 'bancos',
+            idRegistro: id,
+            antes,
+            despues: { bancos, codigo, status }
+        });
 
         res.json({ message: 'Bank updated successfully' });
     }catch (error){

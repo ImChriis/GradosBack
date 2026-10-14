@@ -2,6 +2,7 @@ const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const path = require('path');
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 const getFechaHoraVenezuela = () => {
     const ahora = new Date();
@@ -1467,6 +1468,26 @@ exports.generateClosingPdf = async (req, res) => {
         }
 
         await connection.query("UPDATE Configuracion SET NoCierre = NoCierre + 1");
+
+        // Auditoría del cierre (misma transacción)
+        const antesConfig = await audit.antesDe('SELECT * FROM configuracion LIMIT 1', [], connection);
+        audit.auditarMovimiento({
+            tabla: 'recibopago',
+            mensaje: `Cierre diario N° ${NoCierre} (${fechaReciboFormateada}): ${resRecibos.affectedRows} recibo(s) auditado(s) (NoCierre -> ${NoCierre}, FechaCierre -> ${fechaCierreBD})`,
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'depositos',
+            mensaje: `Cierre diario N° ${NoCierre} (${fechaReciboFormateada}): ${resDepositos.affectedRows} depósito(s) auditado(s) (NoCierre -> ${NoCierre}, FechaCierre -> ${fechaCierreBD})`,
+            conn: connection
+        });
+        audit.auditarUpdate({
+            tabla: 'configuracion',
+            antes: antesConfig,
+            despues: { NoCierre: (antesConfig && antesConfig.NoCierre !== null && antesConfig.NoCierre !== undefined) ? Number(antesConfig.NoCierre) + 1 : null },
+            conn: connection
+        });
+
         await connection.commit();
 
         // 3. CONSULTAS PARA EL REPORTE

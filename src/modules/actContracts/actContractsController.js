@@ -2,6 +2,7 @@ const PDFDocument = require('pdfkit');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 const getFechaHoraVenezuela = () => {
     const ahora = new Date();
@@ -76,11 +77,21 @@ exports.createAct = async(req, res) => {
     try{
         // console.log(req.body);
         const sql = `INSERT INTO ActosGrados (CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        await db.query(sql, [CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst]);
+        const [rowsActo] = await db.query(sql, [CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst]);
 
         const sql2 = 'UPDATE configuracion SET NoActo = ?';
         await db.execute(sql2, [CodigoActo]);
-        
+
+        audit.auditarInsert({
+            tabla: 'actosgrados',
+            idRegistro: rowsActo.insertId,
+            datos: { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, MnCosto, Especialidad, CodUser, Culminada, CodigoInst }
+        });
+        audit.auditarMovimiento({
+            tabla: 'configuracion',
+            mensaje: `Correlativo de acto actualizado: NoActo -> ${CodigoActo} (acto ${CodigoActo} creado)`
+        });
+
         res.status(201).json({ message: "Acto creado exitosamente" });
     } catch (error) {
         console.error('Error creating act:', error);
@@ -93,8 +104,17 @@ exports.updateAct = async (req, res) => {
     const { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, Especialidad, CodUser, Culminada, CodigoInst } = req.body;
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM ActosGrados WHERE CodigoActo = ?', [codigoActo]);
+
         const sql = `UPDATE ActosGrados SET CodigoActo = ?, Fecha = ?, Hora = ?, siglas = ?, Titulo = ?, CoLugar = ?, Especialidad = ?, CodUser = ?, Culminada = ?, CodigoInst = ? WHERE CodigoActo = ?`;
         await db.query(sql, [CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, Especialidad, CodUser, Culminada, CodigoInst, codigoActo]);
+
+        audit.auditarUpdate({
+            tabla: 'actosgrados',
+            antes,
+            despues: { CodigoActo, Fecha, Hora, siglas, Titulo, CoLugar, Especialidad, CodUser, Culminada, CodigoInst }
+        });
+
         res.status(201).json({ message: "Acto actualizado exitosamente" });
     } catch (error) {
         console.error('Error updating act:', error);
@@ -133,6 +153,15 @@ exports.recalculateActTotal = async (req, res) => {
         // 1. Iniciar Transacción
         await connection.beginTransaction();
 
+        // Datos anteriores para la auditoría
+        const antesActo = await audit.antesDe('SELECT * FROM ActosGrados WHERE CodigoActo = ?', [codigoActo], connection);
+        const [[{ total: totalRegistros }]] = await connection.query(
+            'SELECT COUNT(*) AS total FROM DeActosGrados WHERE CodigoActo = ?', [codigoActo]
+        );
+        const [[{ total: totalRecibos }]] = await connection.query(
+            'SELECT COUNT(*) AS total FROM ReciboPago WHERE CodigoActo = ?', [codigoActo]
+        );
+
         // 2. Actualizar tabla maestra de Actos
         await connection.execute(
             "UPDATE ActosGrados SET MnCosto = ? WHERE CodigoActo = ?",
@@ -156,6 +185,24 @@ exports.recalculateActTotal = async (req, res) => {
              WHERE CodigoActo = ?`,
             [nuevoMonto, codigoActo]
         );
+
+        // 5. Auditoría (misma transacción)
+        audit.auditarUpdate({
+            tabla: 'actosgrados',
+            antes: antesActo,
+            despues: { MnCosto: nuevoMonto },
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'deactosgrados',
+            mensaje: `Recalculo de totales del acto ${codigoActo}: MnContrato -> ${nuevoMonto}; MnSaldo = ${nuevoMonto} - MnPagado; ${totalRegistros} contrato(s) afectados`,
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'recibopago',
+            mensaje: `Recalculo de totales del acto ${codigoActo}: MnSaldoRec = ${nuevoMonto} - MnRecibo; ${totalRecibos} recibo(s) afectados`,
+            conn: connection
+        });
 
         // 5. Si todo salió bien, confirmar cambios
         await connection.commit();
@@ -293,6 +340,23 @@ exports.addUserToAct = async (req, res) => {
         const sqlUpdateConfig = "UPDATE Configuracion SET NoContrato = NoContrato + 1";
         await connection.execute(sqlUpdateConfig);
 
+        // --- Auditoría (misma transacción) ---
+        audit.auditarInsert({
+            tabla: 'deactosgrados',
+            datos: {
+                CodigoActo, NoContrato, NuCedula, Nombre, Txcontacto,
+                MnContrato: MnContrato ?? 0, MnPagado: MnPagado ?? 0, MnSaldo: MnSaldo ?? 0,
+                MnInicial: MnInicial ?? 0, MaEdoCont: '1', CodUser: nextCodUser ?? null,
+                Chemise, MnDescuento: MnDescuento ?? 0, CodSucursal
+            },
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'configuracion',
+            mensaje: `Correlativo de contrato actualizado: NoContrato -> ${parseInt(NoContrato) + 1} (contrato N° ${NoContrato} del acto ${CodigoActo})`,
+            conn: connection
+        });
+
         await connection.commit();
 
         res.json({ 
@@ -327,9 +391,9 @@ exports.updateActUser = async (req, res) => {
     try {
         await connection.beginTransaction();
 
-        // --- PASO 1: Verificar que el registro exista y obtener el NoContrato actual ---
+        // --- PASO 1: Verificar que el registro exista y obtener los datos actuales ---
         const [existente] = await connection.execute(
-            "SELECT NoContrato FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?", 
+            "SELECT * FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?", 
             [CodigoActo, NuCedula]
         );
 
@@ -383,7 +447,7 @@ exports.updateActUser = async (req, res) => {
                 SET NoContrato = ? 
                 WHERE NuCedula = ? AND NoContrato = ?
             `;
-            await connection.execute(sqlUpdateRecibos, [contratoNuevo, NuCedula, contratoAnterior]);
+            const [resRecibos] = await connection.execute(sqlUpdateRecibos, [contratoNuevo, NuCedula, contratoAnterior]);
 
             // Actualizar en Depositos
             const sqlUpdateDepositos = `
@@ -391,8 +455,32 @@ exports.updateActUser = async (req, res) => {
                 SET NoContrato = ? 
                 WHERE NuCedula = ? AND NoContrato = ?
             `;
-            await connection.execute(sqlUpdateDepositos, [contratoNuevo, NuCedula, contratoAnterior]);
+            const [resDepositos] = await connection.execute(sqlUpdateDepositos, [contratoNuevo, NuCedula, contratoAnterior]);
+
+            // Auditoría de las tablas asociadas
+            if (resRecibos.affectedRows > 0) {
+                audit.auditarMovimiento({
+                    tabla: 'recibopago',
+                    mensaje: `Cambio de contrato N° ${contratoAnterior} -> ${contratoNuevo} (cédula ${NuCedula}, acto ${CodigoActo}): ${resRecibos.affectedRows} recibo(s) reasignado(s)`,
+                    conn: connection
+                });
+            }
+            if (resDepositos.affectedRows > 0) {
+                audit.auditarMovimiento({
+                    tabla: 'depositos',
+                    mensaje: `Cambio de contrato N° ${contratoAnterior} -> ${contratoNuevo} (cédula ${NuCedula}, acto ${CodigoActo}): ${resDepositos.affectedRows} depósito(s) reasignado(s)`,
+                    conn: connection
+                });
+            }
         }
+
+        // Auditoría del registro principal
+        audit.auditarUpdate({
+            tabla: 'deactosgrados',
+            antes: existente[0],
+            despues: { Chemise: Chemise ?? existente[0].Chemise ?? existente[0].chemise, NoContrato: contratoNuevo ?? contratoAnterior },
+            conn: connection
+        });
 
         await connection.commit();
 
@@ -427,7 +515,7 @@ exports.removeUserFromAct = async (req, res) => {
 
         // --- PASO 1: Verificar existencia del registro y consultar estado financiero/cierre ---
         const [resPersona] = await connection.execute(
-            `SELECT Nocontrato, MnPagado, NoCierre 
+            `SELECT * 
              FROM DeActosGrados 
              WHERE CodigoActo = ? AND NuCedula = ?`, 
             [CodigoActo, NuCedula]
@@ -480,6 +568,14 @@ exports.removeUserFromAct = async (req, res) => {
         // --- PASO 5: Proceder con la eliminación ---
         const sqlDelete = "DELETE FROM DeActosGrados WHERE CodigoActo = ? AND NuCedula = ?";
         await connection.execute(sqlDelete, [CodigoActo, NuCedula]);
+
+        // Auditoría de la baja (misma transacción)
+        audit.auditarDelete({
+            tabla: 'deactosgrados',
+            idRegistro: registro.id,
+            datos: registro,
+            conn: connection
+        });
 
         await connection.commit();
 
@@ -666,6 +762,23 @@ exports.createReciboPago = async (req, res) => {
         const proximoCorrelativo = reciboIdFinal + 1;
         await connection.execute('UPDATE configuracion SET NoRecibo = ?', [proximoCorrelativo]);
 
+        // Auditoría (misma transacción)
+        audit.auditarInsert({
+            tabla: 'recibopago',
+            datos: {
+                NoRecibo: reciboIdFinal, ferecibo, NuCedula: String(NuCedula).trim(),
+                CodSucursal, NoContrato: String(NoContrato).trim(), tprecibo, mnrecibo,
+                mnsaldorec, TxConcepRec, CodUser, Anulado: Anulado ? 1 : 0, Tipo,
+                CodigoActo, MaFormPag, TxBanco, NuRefDocBan
+            },
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'configuracion',
+            mensaje: `Correlativo de recibo actualizado: NoRecibo -> ${proximoCorrelativo} (recibo N° ${reciboIdFinal})`,
+            conn: connection
+        });
+
         await connection.commit();
         connection.release();
 
@@ -702,6 +815,9 @@ exports.createDeposito = async (req, res) => {
     const { NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal } = req.body;
 
     try {
+        // Datos anteriores del contrato para la auditoría del MnInicial
+        const contratoAntes = await audit.antesDe('SELECT * FROM deactosgrados WHERE NoContrato = ?', [NoContrato]);
+
         // 1. Insertar el depósito
         const sqlInsert = `
             INSERT INTO Depositos (
@@ -719,7 +835,22 @@ exports.createDeposito = async (req, res) => {
             WHERE NoContrato = ? 
               AND (MnInicial IS NULL OR MnInicial = 0)
         `;
-        await db.query(sqlUpdateContrato, [MnDeposito, NoContrato]);
+        const [resContrato] = await db.query(sqlUpdateContrato, [MnDeposito, NoContrato]);
+
+        audit.auditarInsert({
+            tabla: 'depositos',
+            idRegistro: rows.insertId,
+            datos: { NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal }
+        });
+
+        if (resContrato.affectedRows > 0) {
+            audit.auditarUpdate({
+                tabla: 'deactosgrados',
+                antes: contratoAntes,
+                despues: { MnInicial: MnDeposito },
+                CodUser
+            });
+        }
 
         res.status(201).json({ 
             status: 'success', 
@@ -748,8 +879,19 @@ exports.updateTotals = async (req, res) => {
     }
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM deactosgrados WHERE CodigoActo = ? AND NuCedula = ?', [CodigoActo, NuCedula]);
+
         const sql = `UPDATE deactosgrados SET MnContrato = ?, MnDescuento = ?, MnPagado = ?, MnSaldo = ?, MnInicial = ? WHERE CodigoActo = ? AND NuCedula = ?`;
         const [rows] = await db.query(sql, [MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial, CodigoActo, NuCedula]);
+
+        if (rows.affectedRows > 0) {
+            audit.auditarUpdate({
+                tabla: 'deactosgrados',
+                antes,
+                despues: { MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial }
+            });
+        }
+
         res.json({ status: 'success', message: 'Totales actualizados correctamente', affectedRows: rows.affectedRows, data: { MnContrato, MnDescuento, MnPagado, MnSaldo, MnInicial } });
     } catch (error){
         console.error("Error al actualizar los totales:", error);

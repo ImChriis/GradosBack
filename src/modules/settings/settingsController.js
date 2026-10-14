@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getSettings = async (req, res) => {
     try{
@@ -26,6 +27,8 @@ exports.updateSettings = async (req, res) => {
     } = req.body;
 
     try {
+        const antes = await audit.antesDe('SELECT * FROM configuracion WHERE Id = ?', [id]);
+
         const sql = `
             UPDATE Configuracion SET 
                 CoSucursal = ?, NbSucursal = ?, Producto = ?, Nombre = ?, Rif = ?, 
@@ -58,6 +61,25 @@ exports.updateSettings = async (req, res) => {
                 message: `No se encontró la configuración con ID: ${id}`
             });
         }
+
+        audit.auditarUpdate({
+            tabla: 'configuracion',
+            idRegistro: id,
+            antes,
+            despues: {
+                CoSucursal, NbSucursal, Producto, Nombre, Rif,
+                Direccion, Telefono, Fax, txclaveadm, NoRecibo,
+                NoContrato, NoActo, CaDiasFab, CaDiasEngaste, MaFormRec,
+                PcOro18, PcOro14, PcOro10, MnMerma, MnCostOro,
+                Impuesto, MnCostoMano, UbicacionLogo, UbicacionRpt,
+                TxMensaje1, TxMensaje2, TxMensaje3,
+                GeneraNoRecibo: GeneraNoRecibo ? 'S' : 'N',
+                GeneraNoContrato: GeneraNoContrato ? 'S' : 'N',
+                GeneraNoActo: GeneraNoActo ? 'S' : 'N',
+                GeneraNoCierre: GeneraNoCierre ? 'S' : 'N',
+                NoCierre
+            }
+        });
 
         res.json({ 
             status: 'success', 

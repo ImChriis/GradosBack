@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getUsers = async (req, res) => {
     try {
@@ -21,7 +22,13 @@ exports.createUser = async (req, res) => {
         const sql = `Insert into Usuarios(Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg) 
                      values (?, ?, ?, ?, ?, ?, ?)`;
         
-        await db.query(sql, [Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg || new Date()]);
+        const [rows] = await db.query(sql, [Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg || new Date()]);
+
+        audit.auditarInsert({
+            tabla: 'usuarios',
+            idRegistro: rows.insertId,
+            datos: { Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg: FechaReg || new Date() }
+        });
         
         res.status(201).json({ message: "Registro Guardado Satisfactoriamente!!!" });
     } catch (error) {
@@ -34,6 +41,11 @@ exports.updateUser = async (req, res) => {
     const { Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg } = req.body;
 
     try {
+        const antes = await audit.antesDe(
+            'SELECT CodUsuario, Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg FROM Usuarios WHERE CodUsuario = ?',
+            [CodUsuario]
+        );
+
         const sql = `Update Usuarios set Cedula=?, Nombre=?, Apellido=?, Usuario=?, Clave=?, MaTipoUsr=?, FechaReg=? 
                      Where CodUsuario=?`;
         
@@ -42,6 +54,13 @@ exports.updateUser = async (req, res) => {
         if (result.affectedRows === 0) {
             return res.status(404).json({ message: "Usuario no encontrado para actualizar" });
         }
+
+        audit.auditarUpdate({
+            tabla: 'usuarios',
+            idRegistro: CodUsuario,
+            antes,
+            despues: { Cedula, Nombre, Apellido, Usuario, Clave, MaTipoUsr, FechaReg }
+        });
 
         res.json({ message: "Registro Actualizado Satisfactoriamente!!!" });
     } catch (error) {

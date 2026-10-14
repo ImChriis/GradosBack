@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getInstitutions = async (req, res) => {
     try{
@@ -23,6 +24,12 @@ exports.addInstitution = async (req, res) => {
     try{
         const sql = "INSERT INTO instituciones (siglas, nbinstitucion, tpinstitucion, CodUser) VALUES (?, ?, ?, ?)";
         const [rows] = await db.query(sql, [siglas, nbinstitucion, tpinstitucion, CodUser]);
+
+        audit.auditarInsert({
+            tabla: 'instituciones',
+            idRegistro: rows.insertId,
+            datos: { siglas, nbinstitucion, tpinstitucion, CodUser }
+        });
 
         res.status(201).json({
             message: 'Institution added successfully',
@@ -49,12 +56,21 @@ exports.updateInstitution = async (req, res) => {
     }
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM instituciones WHERE CodigoInst = ?', [CodigoInst]);
+
         const sql = 'UPDATE instituciones SET siglas = ?, nbinstitucion = ?, tpinstitucion = ?, CodUser = ? WHERE CodigoInst = ?';
         const [rows] = await db.query(sql, [siglas, nbinstitucion, tpinstitucion, CodUser, CodigoInst]);
 
         if(rows.affectedRows === 0){
             return res.status(404).json({ error: 'Institution not found or no changes made' });
         }
+
+        audit.auditarUpdate({
+            tabla: 'instituciones',
+            idRegistro: CodigoInst,
+            antes,
+            despues: { siglas, nbinstitucion, tpinstitucion, CodUser }
+        });
 
         res.json({ message: 'Institution updated sucessfully' });
     }catch (error){

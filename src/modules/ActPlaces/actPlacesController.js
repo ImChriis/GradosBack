@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getActPlaces = async (req, res) => {
     try{
@@ -24,6 +25,12 @@ exports.addActPlace = async (req, res) => {
         const sql = 'INSERT INTO lugaracto (TxLugar, Capacidad, MaTipoLugar, Activo, Coduser) VALUES (?, ?, ?, ?, ?)';
         const [rows] = await db.query(sql, [TxLugar, Capacidad, MaTipoLugar, Activo, CodUser]);
 
+        audit.auditarInsert({
+            tabla: 'lugaracto',
+            idRegistro: rows.insertId,
+            datos: { TxLugar, Capacidad, MaTipoLugar, Activo, CodUser }
+        });
+
         res.status(201).json({
             message: 'Act Place added successfully',
             ActId: rows.insertId
@@ -43,12 +50,21 @@ exports.updateActPlace = async (req, res) => {
     }
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM lugaracto WHERE CoLugar = ?', [CoLugar]);
+
         const sql = 'UPDATE lugaracto SET TxLugar = ?, Capacidad = ?, MaTipoLugar = ?, Activo = ?, CodUser = ? WHERE CoLugar = ?';
         const [rows] = await db.query(sql, [TxLugar, Capacidad, MaTipoLugar, Activo, CodUser, CoLugar]);
 
         if(rows.affectedRows === 0){
             return res.status(404).json({ error: 'Act Place not found or no changes made' });
         }
+
+        audit.auditarUpdate({
+            tabla: 'lugaracto',
+            idRegistro: CoLugar,
+            antes,
+            despues: { TxLugar, Capacidad, MaTipoLugar, Activo, CodUser }
+        });
 
         res.json({ message: 'Act Place updated successfully' });
     }catch (error){

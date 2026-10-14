@@ -1,4 +1,5 @@
 const db = require('../../config/db');
+const audit = require('../audit/auditService');
 
 exports.getSpecialities = async (req, res) => {
     try{
@@ -23,6 +24,12 @@ exports.addSpeciality = async (req, res) => {
     try{
         const sql = "INSERT INTO especialidad (Titulo, Especialidad, CodUser) VALUES (?, ?, ?)";
         const [rows] = await db.query(sql, [Titulo, Especialidad, CodUser]);
+
+        audit.auditarInsert({
+            tabla: 'especialidad',
+            idRegistro: rows.insertId,
+            datos: { Titulo, Especialidad, CodUser }
+        });
 
         res.status(201).json({
             message: 'Speciality added successfully',
@@ -49,12 +56,21 @@ exports.updateSpeciality = async (req, res) => {
     }
 
     try{
+        const antes = await audit.antesDe('SELECT * FROM especialidad WHERE CodigoEsp = ?', [CodigoEsp]);
+
         const sql = "UPDATE especialidad SET Titulo = ?, Especialidad = ?, CodUser = ? WHERE CodigoEsp = ?";
         const [rows] = await db.query(sql, [Titulo, Especialidad, CodUser, CodigoEsp]);
 
         if(rows.affectedRows === 0){
             return res.status(404).json({ error: 'Speciality not found or no changes made' });
         }
+
+        audit.auditarUpdate({
+            tabla: 'especialidad',
+            idRegistro: CodigoEsp,
+            antes,
+            despues: { Titulo, Especialidad, CodUser }
+        });
 
         res.json({ message: 'Speciality updated successfully' });
 
