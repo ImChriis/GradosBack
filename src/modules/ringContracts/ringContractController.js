@@ -48,6 +48,16 @@ const aFechaSQL = (valor) => {
 // Checkbox -> '1' / '0' (el formato que usa la tabla)
 const aFlag = (valor) => (valor === true || valor === 1 || valor === '1' || valor === 'S' || valor === 'true' ? '1' : '0');
 
+// '' o 'undefined' rompen las columnas numéricas (ER_TRUNCATED_WRONG_VALUE_FOR_FIELD).
+// Si no hay dato real devolvemos null, que es lo que la tabla acepta.
+const aEntero = (valor) => {
+    if (valor === null || valor === undefined) return null;
+    const s = String(valor).trim();
+    if (s === '' || s === 'null' || s === 'undefined') return null;
+    const n = Number(s);
+    return Number.isInteger(n) ? n : null;
+};
+
 // Columnas que se pueden escribir y cómo transformar cada una
 const COLUMNAS = [
     // --- Detalles ---
@@ -471,7 +481,7 @@ exports.updateEstado = async (req, res) => {
 // PUT /ringContracts/updateTotals/:id  → pestaña Saldo (montos base)
 exports.updateTotals = async (req, res) => {
     const { id } = req.params;
-    const { mncontrato, mndescuento, mninicial } = req.body || {};
+    const { mncontrato, mndescuento, mninicial, mnpagado } = req.body || {};
 
     try {
         const antes = await audit.antesDe('SELECT * FROM contratos WHERE id = ?', [id]);
@@ -481,7 +491,7 @@ exports.updateTotals = async (req, res) => {
 
         const mContrato = mncontrato !== undefined ? parseMonto(mncontrato) : parseMonto(antes.mncontrato);
         const mDescuento = mndescuento !== undefined ? parseMonto(mndescuento) : parseMonto(antes.mndescuento);
-        const mPagado = parseMonto(antes.mnpagado);
+        const mPagado = mnpagado !== undefined ? parseMonto(mnpagado) : parseMonto(antes.mnpagado);
         const mSaldo = Math.max(0, mContrato - mDescuento - mPagado);
 
         const sets = [];
@@ -491,6 +501,7 @@ exports.updateTotals = async (req, res) => {
         if (mncontrato !== undefined) { sets.push('mncontrato = ?'); params.push(formatMonto(mContrato)); despues.mncontrato = formatMonto(mContrato); }
         if (mndescuento !== undefined) { sets.push('mndescuento = ?'); params.push(formatMonto(mDescuento)); despues.mndescuento = formatMonto(mDescuento); }
         if (mninicial !== undefined) { sets.push('mninicial = ?'); params.push(transformar('monto', mninicial)); despues.mninicial = transformar('monto', mninicial); }
+        if (mnpagado !== undefined) { sets.push('mnpagado = ?'); params.push(formatMonto(mPagado)); despues.mnpagado = formatMonto(mPagado); }
 
         if (!sets.length) {
             return res.status(400).json({ error: 'No se enviaron montos para actualizar' });
@@ -512,11 +523,190 @@ exports.updateTotals = async (req, res) => {
         res.json({
             status: 'success',
             message: 'Montos actualizados correctamente',
-            data: { mncontrato: despues.mncontrato ?? antes.mncontrato, mndescuento: despues.mndescuento ?? antes.mndescuento, mninicial: despues.mninicial ?? antes.mninicial, mnsaldo: despues.mnsaldo, mnpagado: antes.mnpagado }
+            data: { mncontrato: despues.mncontrato ?? antes.mncontrato, mndescuento: despues.mndescuento ?? antes.mndescuento, mninicial: despues.mninicial ?? antes.mninicial, mnsaldo: despues.mnsaldo, mnpagado: despues.mnpagado ?? antes.mnpagado }
         });
     } catch (error) {
         console.error('Error updating contract amounts:', error);
         res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// POST /ringContracts/createRecibo  → modal de pagos (misma mecánica que actContracts)
+// Crea el recibo en memoria de facturación. Los anillos van con CodigoActo = NULL y Tipo = '2'.
+exports.createReciboPago = async (req, res) => {
+    const {
+        NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato,
+        tprecibo, mnrecibo, mnsaldorec, TxConcepRec, CodUser,
+        Anulado, Tipo, MaFormPag, TxBanco, NuRefDocBan
+    } = req.body || {};
+
+    // Tipo 1 = contrato de actos, 2 = contrato de anillos (default del módulo)
+    const tipoContrato = Tipo === undefined || Tipo === null || Tipo === '' ? '2' : String(Tipo);
+    const fechaRecibo = aFechaSQL(ferecibo);
+
+    // Son columnas enteras: sin esto llega '' y MySQL truena con ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+    const nucedula = aEntero(NuCedula);
+    const nocontrato = aEntero(NoContrato);
+    if (!nucedula || !nocontrato) {
+        return res.status(400).json({ status: 'error', message: 'Faltan datos obligatorios: NoContrato y NuCedula' });
+    }
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // 1. Consecutivo actual bloqueado (evita que dos usuarios tomen el mismo número)
+        const [configRows] = await connection.query('SELECT NoRecibo FROM configuracion FOR UPDATE');
+        if (configRows.length === 0) {
+            await connection.rollback();
+            connection.release();
+            return res.status(500).json({ status: 'error', message: 'No se encontró el registro de configuración.' });
+        }
+
+        const correlativoConfig = Number(configRows[0].NoRecibo);
+        let reciboIdFinal = Number(NoRecibo) || correlativoConfig;
+
+        // 2. Si ese NoRecibo ya existe usamos el mayor guardado + 1
+        const [existing] = await connection.query('SELECT NoRecibo FROM recibopago WHERE NoRecibo = ?', [reciboIdFinal]);
+        if (existing.length > 0) {
+            const [maxRows] = await connection.query('SELECT MAX(NoRecibo) AS maxRecibo FROM recibopago FOR UPDATE');
+            const maxActual = maxRows[0].maxRecibo ? Number(maxRows[0].maxRecibo) : correlativoConfig;
+            reciboIdFinal = Math.max(correlativoConfig, maxActual + 1);
+        }
+
+        // 3. Insertar
+        await connection.query(
+            `INSERT INTO recibopago
+                (NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, TpRecibo, MnRecibo, mnsaldorec,
+                 TxConcepRec, CodUser, Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+            [
+                reciboIdFinal, fechaRecibo, nucedula, aEntero(CodSucursal),
+                nocontrato, tprecibo, mnrecibo, mnsaldorec,
+                TxConcepRec ?? null, aEntero(CodUser), Anulado ? 1 : 0, tipoContrato,
+                MaFormPag ?? null, TxBanco ?? null, NuRefDocBan ?? null
+            ]
+        );
+
+        // 4. Correlativo siguiente
+        const proximoCorrelativo = reciboIdFinal + 1;
+        await connection.query('UPDATE configuracion SET NoRecibo = ?', [proximoCorrelativo]);
+
+        // Auditoría (misma transacción)
+        audit.auditarInsert({
+            tabla: 'recibopago',
+            datos: {
+                NoRecibo: reciboIdFinal, ferecibo: fechaRecibo, NuCedula: nucedula,
+                CodSucursal: aEntero(CodSucursal), NoContrato: nocontrato, TpRecibo: tprecibo, MnRecibo: mnrecibo,
+                mnsaldorec, TxConcepRec, CodUser: aEntero(CodUser), Anulado: Anulado ? 1 : 0, Tipo: tipoContrato,
+                CodigoActo: null, MaFormPag, TxBanco, NuRefDocBan
+            },
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'configuracion',
+            mensaje: `Correlativo de recibo actualizado: NoRecibo -> ${proximoCorrelativo} (recibo N° ${reciboIdFinal} de contrato de anillo)`,
+            conn: connection
+        });
+
+        await connection.commit();
+        connection.release();
+
+        return res.status(201).json({
+            status: 'success',
+            message: 'Recibo creado correctamente',
+            noRecibo: reciboIdFinal,
+            proximoCorrelativo
+        });
+    } catch (error) {
+        await connection.rollback();
+        connection.release();
+
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({
+                status: 'error',
+                code: 'RECIBO_DUPLICADO',
+                message: 'El número de recibo ya se encuentra registrado. Intenta nuevamente.',
+                sugerido: Number(NoRecibo) + 1
+            });
+        }
+
+        console.error('Error al insertar el recibo:', error);
+        return res.status(500).json({ status: 'error', message: 'Error interno al intentar guardar el recibo' });
+    }
+};
+
+// POST /ringContracts/createDeposito  → modal de pagos (misma mecánica que actContracts)
+exports.createDeposito = async (req, res) => {
+    const { NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal } = req.body || {};
+
+    // depositos.CodSucursal y .CodUser son int: '' los tumbaría con
+    // ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, así que '' -> null antes de tocar la BD
+    const nucedula = aEntero(NuCedula);
+    const nocontrato = aEntero(NoContrato);
+    const norecibo = aEntero(NoRecibo);
+    const codUser = aEntero(CodUser);
+    const codSucursal = aEntero(CodSucursal);
+
+    if (!nucedula || !nocontrato || !norecibo) {
+        return res.status(400).json({ status: 'error', message: 'Faltan datos obligatorios: NoContrato, NuCedula y NoRecibo' });
+    }
+
+    try {
+        const contratoAntes = await audit.antesDe('SELECT * FROM contratos WHERE NoContrato = ? AND nucedula = ?', [nocontrato, nucedula]);
+
+        // 1. Depósito
+        const [rows] = await db.query(
+            `INSERT INTO depositos
+                (NoContrato, NuCedula, NoRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser, CodSucursal)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                nocontrato, nucedula, norecibo, aFechaSQL(Fecha), TipoOperacion ?? null, TxBanco ?? null,
+                NuDeposito !== undefined && NuDeposito !== null && String(NuDeposito).trim() !== '' ? String(NuDeposito).trim() : null,
+                MnDeposito !== undefined && MnDeposito !== null && MnDeposito !== '' ? parseMonto(MnDeposito) : 0,
+                codUser, codSucursal
+            ]
+        );
+
+        // 2. El primer depósito define la inicial del contrato si aún no tiene.
+        // OJO: los montos de `contratos` son varchar en formato venezolano ("0,00"),
+        // así que `mninicial = 0` en SQL obliga a convertir "0,00" a DECIMAL y MySQL
+        // lo rechaza en modo strict (ER_TRUNCATED_WRONG_VALUE). El cero se decide en JS.
+        const mInicial = MnDeposito !== undefined && MnDeposito !== null && MnDeposito !== '' ? parseMonto(MnDeposito) : 0;
+        const sinInicial = !contratoAntes || parseMonto(contratoAntes.mninicial) === 0;
+        let filasInicial = { affectedRows: 0 };
+
+        if (sinInicial) {
+            [filasInicial] = await db.query(
+                'UPDATE contratos SET mninicial = ? WHERE NoContrato = ? AND nucedula = ?',
+                [formatMonto(mInicial), nocontrato, nucedula]
+            );
+        }
+
+        audit.auditarInsert({
+            tabla: 'depositos',
+            idRegistro: rows.insertId,
+            datos: { NoContrato: nocontrato, NuCedula: nucedula, NoRecibo: norecibo, Fecha: aFechaSQL(Fecha), TipoOperacion, TxBanco, NuDeposito, MnDeposito, CodUser: codUser, CodSucursal: codSucursal }
+        });
+
+        if (contratoAntes && sinInicial && filasInicial.affectedRows > 0) {
+            audit.auditarUpdate({
+                tabla: 'contratos',
+                antes: contratoAntes,
+                despues: { mninicial: formatMonto(mInicial) },
+                CodUser: codUser
+            });
+        }
+
+        res.status(201).json({
+            status: 'success',
+            message: 'Depósito registrado correctamente',
+            affectedRows: rows.affectedRows
+        });
+    } catch (error) {
+        console.error('Error al registrar el depósito:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error', details: error.message });
     }
 };
 
@@ -525,7 +715,7 @@ exports.updateTotals = async (req, res) => {
 // y actualiza mnpagado / mnsaldo / mninicial del contrato.
 exports.payContract = async (req, res) => {
     const { id } = req.params;
-    const { monto, TpRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, TxConcepRec, MaFormPag, NuRefDocBan, CodUser, CodSucursal } = req.body || {};
+    const { monto, TpRecibo, Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito, TxConcepRec, MaFormPag, NuRefDocBan, CodUser, CodSucursal, Tipo, NoRecibo } = req.body || {};
 
     if (monto === undefined || monto === null || monto === '') {
         return res.status(400).json({ status: 'error', message: 'El monto es obligatorio' });
@@ -567,7 +757,7 @@ exports.payContract = async (req, res) => {
             return res.status(500).json({ status: 'error', message: 'No se encontró el registro de configuración' });
         }
         const correlativoConfig = Number(configRows[0].NoRecibo);
-        let reciboIdFinal = Number(req.body.NoRecibo) || correlativoConfig;
+        let reciboIdFinal = Number(NoRecibo) || correlativoConfig;
 
         const [existeRecibo] = await connection.query('SELECT NoRecibo FROM recibopago WHERE NoRecibo = ?', [reciboIdFinal]);
         if (existeRecibo.length > 0) {
@@ -587,17 +777,20 @@ exports.payContract = async (req, res) => {
         // Primer pago sin inicial registrada -> se considera Inicial
         const tipoRecibo = TpRecibo ? String(TpRecibo).toUpperCase() : parseMonto(contrato.mninicial) === 0 ? 'I' : 'A';
         const ferecibo = aFechaSQL(Fecha) === '1900-01-01' ? new Date().toISOString().slice(0, 10) : aFechaSQL(Fecha);
+        // Tipo del contrato: 1 = actos, 2 = anillos (los anillos son el default del módulo)
+        const tipoContrato = Tipo === undefined || Tipo === null || Tipo === '' ? '2' : String(Tipo);
 
         // 4. Recibo de pago (los anillos van con CodigoActo NULL)
         await connection.query(
             `INSERT INTO recibopago
                 (NoRecibo, ferecibo, NuCedula, CodSucursal, NoContrato, TpRecibo, MnRecibo, mnsaldorec,
                  TxConcepRec, CodUser, Anulado, Tipo, CodigoActo, MaFormPag, TxBanco, NuRefDocBan)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?)`,
             [
                 reciboIdFinal, ferecibo, contrato.nucedula, CodSucursal ?? contrato.CodSucursal,
                 contrato.NoContrato, tipoRecibo, montoPagado, nuevoSaldo,
-                TxConcepRec ?? null, CodUser ?? contrato.CodUser, MaFormPag ?? null, TxBanco ?? null, NuRefDocBan ?? null
+                TxConcepRec ?? null, CodUser ?? contrato.CodUser, tipoContrato,
+                MaFormPag ?? null, TxBanco ?? null, NuRefDocBan ?? null
             ]
         );
 
@@ -633,7 +826,7 @@ exports.payContract = async (req, res) => {
                 NoRecibo: reciboIdFinal, ferecibo, NuCedula: contrato.nucedula,
                 NoContrato: contrato.NoContrato, TpRecibo: tipoRecibo, MnRecibo: montoPagado,
                 mnsaldorec: nuevoSaldo, TxConcepRec: TxConcepRec ?? null,
-                CodUser: CodUser ?? contrato.CodUser, CodigoActo: null
+                CodUser: CodUser ?? contrato.CodUser, CodigoActo: null, Tipo: tipoContrato
             },
             conn: connection
         });

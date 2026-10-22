@@ -21,6 +21,10 @@ router.get('/:id', ringContractController.getContractById);
 // Crear contrato (NoContrato lo digita el usuario y se valida)
 router.post('/create', ringContractController.createContract);
 
+// Modal de pagos: recibo y depósito por separado (igual que actContracts)
+router.post('/createRecibo', ringContractController.createReciboPago);
+router.post('/createDeposito', ringContractController.createDeposito);
+
 // Pestañas Detalles + Regalías
 router.put('/update/:id', ringContractController.updateContract);
 
