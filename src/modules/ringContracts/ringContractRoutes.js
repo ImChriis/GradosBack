@@ -34,6 +34,10 @@ router.put('/updateEstado/:id', ringContractController.updateEstado);
 // Pestaña Saldo (montos base, recalcula mnsaldo)
 router.put('/updateTotals/:id', ringContractController.updateTotals);
 
+// Anula un recibo: lo marca en '1', devuelve el monto al saldo y se niega
+// si el recibo ya pertenece a un cierre
+router.put('/:id/anularRecibo', ringContractController.anularRecibo);
+
 // Botón "Efectuar Pago": ReciboPago + Depositos + montos del contrato
 router.post('/pay/:id', ringContractController.payContract);
 

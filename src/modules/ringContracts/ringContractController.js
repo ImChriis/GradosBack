@@ -261,11 +261,12 @@ exports.getRecibos = async (req, res) => {
         const { id } = req.params;
         const [rows] = await db.query(
             `SELECT r.id, r.NoRecibo, r.FeRecibo, r.ferecibo, r.MnRecibo, r.mnsaldorec, r.TpRecibo,
-                    r.TxBanco, r.NuRefDocBan, r.TxConcepRec, r.CodSucursal, r.CodUser, r.NoCierre
+                    r.TxBanco, r.NuRefDocBan, r.TxConcepRec, r.CodSucursal, r.CodUser, r.NoCierre,
+                    r.FechaCierre, r.Anulado
              FROM recibopago r
              INNER JOIN contratos c ON c.NoContrato = r.NoContrato AND c.nucedula = r.NuCedula
              WHERE c.id = ? AND (r.CodigoActo IS NULL OR r.CodigoActo = 0)
-             ORDER BY r.NoRecibo`,
+             ORDER BY r.NoRecibo DESC`,
             [id]
         );
         res.json({ status: 'success', data: rows, total: rows.length });
@@ -531,6 +532,185 @@ exports.updateTotals = async (req, res) => {
     }
 };
 
+// ---------------------------------------------------------------
+//  Anulación de un recibo → PUT /ringContracts/:id/anularRecibo
+// ---------------------------------------------------------------
+// Marca `recibopago.Anulado = '1'` y devuelve el monto del recibo al saldo
+// del contrato: mnpagado baja y mnsaldo se recalcula con la misma fórmula
+// que la pestaña Saldo (mncontrato - mndescuento - mnpagado).
+//
+// Un recibo que ya forma parte de un cierre NO se puede anular: NoCierre o
+// FechaCierre con datos significa que otra transacción lo reclamó.
+const perteneceACierre = (recibo) => {
+    const cierre = recibo.NoCierre;
+    if (cierre !== null && cierre !== undefined && cierre !== '' && Number(cierre) !== 0) return true;
+    return recibo.FechaCierre !== null && recibo.FechaCierre !== undefined && recibo.FechaCierre !== '';
+};
+
+exports.anularRecibo = async (req, res) => {
+    const { id } = req.params;
+    const { NoRecibo, CodUser } = req.body || {};
+
+    const contratoId = aEntero(id);
+    const noRecibo = aEntero(NoRecibo);
+
+    if (!contratoId || !noRecibo) {
+        return res.status(400).json({
+            status: 'error',
+            code: 'PARAMETROS_FALTANTES',
+            message: 'Faltan el contrato o el número de recibo'
+        });
+    }
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // El JOIN con `contratos` garantiza que el recibo le pertenece a ESTE
+        // contrato; FOR UPDATE evita que dos anulaciones simultáneas descuenten dos veces.
+        const [filas] = await connection.query(
+            `SELECT r.id, r.NoRecibo, r.MnRecibo, r.Anulado, r.NoCierre, r.FechaCierre,
+                    c.id AS contratoId, c.mncontrato, c.mndescuento, c.mninicial, c.mnpagado, c.mnsaldo
+             FROM recibopago r
+             INNER JOIN contratos c ON c.NoContrato = r.NoContrato AND c.nucedula = r.NuCedula
+             WHERE c.id = ? AND r.NoRecibo = ? AND (r.CodigoActo IS NULL OR r.CodigoActo = 0)
+             FOR UPDATE`,
+            [contratoId, noRecibo]
+        );
+
+        if (filas.length === 0) {
+            await connection.rollback();
+            connection.release();
+            return res.status(404).json({
+                status: 'error',
+                code: 'RECIBO_NO_ENCONTRADO',
+                message: `El recibo N° ${noRecibo} no pertenece a este contrato.`
+            });
+        }
+
+        const recibo = filas[0];
+
+        if (String(recibo.Anulado ?? '') === '1') {
+            await connection.rollback();
+            connection.release();
+            return res.status(409).json({
+                status: 'error',
+                code: 'RECIBO_YA_ANULADO',
+                message: `El recibo N° ${noRecibo} ya fue anulado.`
+            });
+        }
+
+        if (perteneceACierre(recibo)) {
+            await connection.rollback();
+            connection.release();
+            return res.status(409).json({
+                status: 'error',
+                code: 'RECIBO_CERRADO',
+                message: `No se puede anular: el recibo N° ${noRecibo} ya pertenece a un cierre.`
+            });
+        }
+
+        // Los recibos se anulan en orden estricto, del último al primero: solo
+        // puede anularse el recibo activo de mayor NoRecibo. El FOR UPDATE de arriba
+        // ya bloqueó el recibo pedido, así que nadie puede saltarse el turno.
+        const [ultimo] = await connection.query(
+            `SELECT MAX(r.NoRecibo) AS noRecibo
+             FROM recibopago r
+             INNER JOIN contratos c ON c.NoContrato = r.NoContrato AND c.nucedula = r.NuCedula
+             WHERE c.id = ? AND (r.CodigoActo IS NULL OR r.CodigoActo = 0)
+               AND (r.Anulado IS NULL OR r.Anulado <> '1')`,
+            [contratoId]
+        );
+
+        const ultimoActivo = aEntero(ultimo?.[0]?.noRecibo);
+        if (ultimoActivo && noRecibo !== ultimoActivo) {
+            await connection.rollback();
+            connection.release();
+            return res.status(409).json({
+                status: 'error',
+                code: 'ORDEN_ANULACION',
+                message: `Solo se anula en orden: antes debe anularse el recibo N° ${ultimoActivo}.`
+            });
+        }
+
+        // El primer recibo del contrato es el monto inicial. Al anularlo, el
+        // inicial vuelve a quedar en 0 (nada más el primero lo toca).
+        const [primeros] = await connection.query(
+            `SELECT MIN(r.NoRecibo) AS noRecibo
+             FROM recibopago r
+             INNER JOIN contratos c ON c.NoContrato = r.NoContrato AND c.nucedula = r.NuCedula
+             WHERE c.id = ? AND (r.CodigoActo IS NULL OR r.CodigoActo = 0)`,
+            [contratoId]
+        );
+
+        const esElPrimero = aEntero(primeros?.[0]?.noRecibo) === noRecibo;
+        const mninicialDespues = esElPrimero ? 0 : parseMonto(recibo.mninicial);
+
+        // Los montos de `contratos` son texto en formato venezolano: se leen con
+        // parseMonto y se guardan con formatMonto, igual que updateTotals.
+        const total = Math.max(0, parseMonto(recibo.mncontrato) - parseMonto(recibo.mndescuento));
+        const pagadoDespues = Math.max(0, parseMonto(recibo.mnpagado) - parseMonto(recibo.MnRecibo));
+        const saldoDespues = Math.max(0, total - pagadoDespues);
+
+        await connection.query('UPDATE recibopago SET Anulado = ? WHERE id = ?', ['1', recibo.id]);
+        await connection.query('UPDATE contratos SET mninicial = ?, mnpagado = ?, mnsaldo = ? WHERE id = ?', [
+            formatMonto(mninicialDespues), formatMonto(pagadoDespues), formatMonto(saldoDespues), contratoId
+        ]);
+
+        await audit
+            .auditarUpdate({
+                tabla: 'recibopago',
+                idRegistro: recibo.id,
+                antes: { Anulado: recibo.Anulado },
+                despues: { Anulado: '1' },
+                CodUser: aEntero(CodUser),
+                conn: connection
+            })
+            .catch((e) => console.error('auditoría recibopago:', e));
+
+        await audit
+            .auditarUpdate({
+                tabla: 'contratos',
+                idRegistro: contratoId,
+                antes: {
+                    mninicial: recibo.mninicial,
+                    mnpagado: recibo.mnpagado,
+                    mnsaldo: recibo.mnsaldo
+                },
+                despues: {
+                    mninicial: formatMonto(mninicialDespues),
+                    mnpagado: formatMonto(pagadoDespues),
+                    mnsaldo: formatMonto(saldoDespues)
+                },
+
+                CodUser: aEntero(CodUser),
+                conn: connection
+            })
+            .catch((e) => console.error('auditoría contratos:', e));
+
+        await connection.commit();
+        connection.release();
+
+        res.json({
+            status: 'success',
+            message: `Recibo N° ${noRecibo} anulado correctamente`,
+            data: {
+                NoRecibo: noRecibo,
+                Anulado: '1',
+                mninicial: formatMonto(mninicialDespues),
+                mnpagado: formatMonto(pagadoDespues),
+                mnsaldo: formatMonto(saldoDespues)
+            }
+        });
+    } catch (error) {
+        await connection.rollback();
+        connection.release();
+        console.error('Error anulando recibo:', error);
+        res.status(500).json({ status: 'error', message: 'Internal Server Error' });
+    }
+};
+
 // POST /ringContracts/createRecibo  → modal de pagos (misma mecánica que actContracts)
 // Crea el recibo en memoria de facturación. Los anillos van con CodigoActo = NULL y Tipo = '2'.
 exports.createReciboPago = async (req, res) => {
@@ -589,7 +769,37 @@ exports.createReciboPago = async (req, res) => {
             ]
         );
 
-        // 4. Correlativo siguiente
+        // 4. El PRIMER recibo del contrato fija el monto inicial.
+        //    El cero se decide en JS: los montos de `contratos` son varchar en
+        //    formato venezolano ("0,00") y compararlos con 0 en SQL truena en modo
+        //    strict (ER_TRUNCATED_WRONG_VALUE). El candado de `configuracion` que ya
+        //    tomamos arriba serializa este paso, así que no hay carrera.
+        const mRecibo = parseMonto(mnrecibo);
+        const [filasContrato] = await connection.query(
+            'SELECT * FROM contratos WHERE NoContrato = ? AND nucedula = ? FOR UPDATE',
+            [nocontrato, nucedula]
+        );
+        const contratoActual = filasContrato[0] ?? null;
+        const fijarInicial = contratoActual !== null && mRecibo > 0 && parseMonto(contratoActual.mninicial) === 0;
+
+        if (fijarInicial) {
+            const montoInicialNuevo = formatMonto(mRecibo);
+
+            await connection.query('UPDATE contratos SET mninicial = ? WHERE id = ?', [
+                montoInicialNuevo, contratoActual.id
+            ]);
+
+            audit.auditarUpdate({
+                tabla: 'contratos',
+                idRegistro: contratoActual.id,
+                antes: contratoActual,
+                despues: { mninicial: montoInicialNuevo },
+                CodUser: aEntero(CodUser),
+                conn: connection
+            });
+        }
+
+        // 5. Correlativo siguiente
         const proximoCorrelativo = reciboIdFinal + 1;
         await connection.query('UPDATE configuracion SET NoRecibo = ?', [proximoCorrelativo]);
 

@@ -20,6 +20,9 @@ router.put('/updateAct/:codigoActo', actContractsController.updateAct);
 router.put('/updateActUser/:CodigoActo/:NuCedula', actContractsController.updateActUser);
 router.post('/createDeposito', actContractsController.createDeposito);
 router.put('/updateTotals/:CodigoActo/:NuCedula', actContractsController.updateTotals);
+// Anula un recibo: lo marca en '1', devuelve el monto al saldo y se niega
+// si el recibo ya pertenece a un cierre
+router.put('/anularRecibo', actContractsController.anularRecibo);
 router.post('/printReciboPdf/:NoRecibo/:usuarioReporte', actContractsController.printReciboPdf);
 router.post('/printReciboPdfOnePage/:NoRecibo/:usuarioReporte', actContractsController.printReciboPdfOnePage);
 router.post('/sendReciboEmail/:NoRecibo/:usuarioReporte', actContractsController.sendReciboEmail);

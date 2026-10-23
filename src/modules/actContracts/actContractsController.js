@@ -639,7 +639,7 @@ exports.getRecibosByUserContract = async (req, res) => {
     }
     
     try{
-        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec FROM ReciboPago WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ? ORDER BY NoRecibo`;
+        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec, Anulado, NoCierre, FechaCierre FROM ReciboPago WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ? ORDER BY NoRecibo DESC`;
         const [rows] = await db.execute(sql, [NoContrato, CodigoActo, NuCedula]);
 
         if(rows.length === 0){
@@ -900,6 +900,223 @@ exports.updateTotals = async (req, res) => {
     }
 }
 
+// ------------------------------------------------------------------
+//  Anulación de un recibo → PUT /actContracts/anularRecibo
+// ------------------------------------------------------------------
+// Marca `recibopago.Anulado = '1'` y devuelve el monto del recibo al saldo
+// del registro: MnPagado baja y MnSaldo se recalcula con la misma fórmula que
+// usa el modal (MnContrato - MnPagado).
+//
+// Un recibo con NoCierre o FechaCierre ya pertenece a un cierre diario y no
+// se puede anular.
+const perteneceACierre = (recibo) => {
+    const cierre = recibo.NoCierre;
+    if (cierre !== null && cierre !== undefined && cierre !== '' && Number(cierre) !== 0) return true;
+    return recibo.FechaCierre !== null && recibo.FechaCierre !== undefined && recibo.FechaCierre !== '';
+};
+
+exports.anularRecibo = async (req, res) => {
+    const { NoContrato, CodigoActo, NuCedula, NoRecibo, CodUser } = req.body || {};
+
+    if (!NoContrato || !CodigoActo || !NuCedula || !NoRecibo) {
+        return res.status(400).json({
+            status: 'error',
+            code: 'PARAMETROS_FALTANTES',
+            message: 'Faltan NoContrato, CodigoActo, NuCedula o NoRecibo'
+        });
+    }
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // MISMA llave que getRecibosByUserContract: NoContrato + CodigoActo + NuCedula
+        const [recibos] = await connection.execute(
+            `SELECT id, NoRecibo, MnRecibo, Anulado, NoCierre, FechaCierre
+             FROM recibopago
+             WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ? AND NoRecibo = ?
+             FOR UPDATE`,
+            [NoContrato, CodigoActo, NuCedula, NoRecibo]
+        );
+
+
+        if (recibos.length === 0) {
+            await connection.rollback();
+            connection.release();
+            return res.status(404).json({
+                status: 'error',
+                code: 'RECIBO_NO_ENCONTRADO',
+                message: `El recibo N° ${NoRecibo} no pertenece a este contrato.`
+            });
+        }
+
+        const recibo = recibos[0];
+
+        if (String(recibo.Anulado ?? '') === '1') {
+            await connection.rollback();
+            connection.release();
+            return res.status(409).json({
+                status: 'error',
+                code: 'RECIBO_YA_ANULADO',
+                message: `El recibo N° ${NoRecibo} ya fue anulado.`
+            });
+        }
+
+        if (perteneceACierre(recibo)) {
+            await connection.rollback();
+            connection.release();
+            return res.status(409).json({
+                status: 'error',
+                code: 'RECIBO_CERRADO',
+                message: `No se puede anular: el recibo N° ${NoRecibo} ya pertenece a un cierre.`
+            });
+        }
+
+        // Los recibos se anulan en orden estricto, del último al primero: solo
+        // puede anularse el recibo activo de mayor NoRecibo.
+        const [ultimo] = await connection.execute(
+            `SELECT MAX(NoRecibo) AS noRecibo
+             FROM recibopago
+             WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ?
+               AND (Anulado IS NULL OR Anulado <> '1')`,
+            [NoContrato, CodigoActo, NuCedula]
+        );
+
+        const ultimoActivo = Number(ultimo?.[0]?.noRecibo ?? 0);
+        if (ultimoActivo && Number(NoRecibo) !== ultimoActivo) {
+            await connection.rollback();
+            connection.release();
+            return res.status(409).json({
+                status: 'error',
+                code: 'ORDEN_ANULACION',
+                message: `Solo se anula en orden: antes debe anularse el recibo N° ${ultimoActivo}.`
+            });
+        }
+
+        // El primer recibo del registro es el monto inicial. Al anularlo, el
+        // inicial vuelve a quedar en 0 (nada más el primero lo toca).
+        const [primeros] = await connection.execute(
+            `SELECT MIN(NoRecibo) AS noRecibo
+             FROM recibopago
+             WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ?`,
+            [NoContrato, CodigoActo, NuCedula]
+        );
+
+        const esElPrimero = Number(primeros?.[0]?.noRecibo ?? 0) === Number(NoRecibo);
+
+        // MISMA llave que getPaymentDataByContract / updateTotals
+        const [personas] = await connection.execute(
+            `SELECT MnContrato, MnInicial, MnPagado, MnSaldo
+             FROM deactosgrados
+             WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ?
+             FOR UPDATE`,
+            [NoContrato, CodigoActo, NuCedula]
+        );
+
+
+        if (personas.length === 0) {
+            await connection.rollback();
+            connection.release();
+            return res.status(404).json({
+                status: 'error',
+                code: 'REGISTRO_NO_ENCONTRADO',
+                message: 'No se encontró el registro del contrato en el acto.'
+            });
+        }
+
+        const registro = personas[0];
+        const pagadoAntes = Number(registro.MnPagado ?? 0);
+        const pagadoDespues = Math.max(0, pagadoAntes - Number(recibo.MnRecibo ?? 0));
+        const saldoDespues = Math.max(0, Number(registro.MnContrato ?? 0) - pagadoDespues);
+        const inicialDespues = esElPrimero ? 0 : Number(registro.MnInicial ?? 0);
+
+        await connection.execute(
+            'UPDATE recibopago SET Anulado = ? WHERE id = ?',
+            ['1', recibo.id]
+        );
+        await connection.execute(
+            'UPDATE deactosgrados SET MnInicial = ?, MnPagado = ?, MnSaldo = ? WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ?',
+            [inicialDespues, pagadoDespues, saldoDespues, NoContrato, CodigoActo, NuCedula]
+        );
+
+        await audit
+            .auditarUpdate({
+                tabla: 'recibopago',
+                idRegistro: recibo.id,
+                antes: { Anulado: recibo.Anulado },
+                despues: { Anulado: '1' },
+                CodUser: CodUser !== undefined && CodUser !== null && CodUser !== '' ? String(CodUser) : null,
+                conn: connection
+            })
+            .catch((e) => console.error('auditoría recibopago:', e));
+
+        await audit
+            .auditarUpdate({
+                tabla: 'deactosgrados',
+                idRegistro: null,
+                antes: {
+                    MnInicial: registro.MnInicial,
+                    MnPagado: registro.MnPagado,
+                    MnSaldo: registro.MnSaldo
+                },
+                despues: {
+                    MnInicial: inicialDespues,
+                    MnPagado: pagadoDespues,
+                    MnSaldo: saldoDespues
+                },
+
+                CodUser: CodUser !== undefined && CodUser !== null && CodUser !== '' ? String(CodUser) : null,
+                conn: connection
+            })
+            .catch((e) => console.error('auditoría deactosgrados:', e));
+
+        await connection.commit();
+        connection.release();
+
+        res.json({
+            status: 'success',
+            message: `Recibo N° ${NoRecibo} anulado correctamente`,
+            data: {
+                NoRecibo: Number(NoRecibo),
+                Anulado: '1',
+                MnInicial: inicialDespues,
+                MnPagado: pagadoDespues,
+                MnSaldo: saldoDespues
+            }
+        });
+    } catch (error) {
+        await connection.rollback();
+        connection.release();
+        console.error('Error anulando recibo:', error);
+        res.status(500).json({ status: 'error', message: 'Error interno al anular el recibo', details: error.message });
+    }
+};
+
+// ---------------------------------------------------------------
+//  Título del recibo en los PDF y en los correos
+// ---------------------------------------------------------------
+// Los mismos endpoints de PDF/correo atienden a los dos módulos: el modal de
+// pagos de anillos reutiliza estas funciones. Así que el título no se decide
+// por el endpoint sino por el propio recibo.
+//
+// Tipo: '1' = contrato de actos de grado, '2' = contrato de anillo.
+// Los recibos de anillo se escriben con Tipo = '2' y CodigoActo vacío, así que
+// la segunda condición cubre los registros antiguos que no traen Tipo.
+const TITULO_RECIBO_ACTO = 'RECIBO DE CONTRATO DE ACTO DE GRADO';
+const TITULO_RECIBO_ANILLO = 'RECIBO DE CONTRATO DE ANILLO';
+
+const tituloDeRecibo = (recibo) => {
+    const esAnillo =
+        String(recibo?.Tipo ?? '') === '2' ||
+        recibo?.CodigoActo === null ||
+        recibo?.CodigoActo === undefined ||
+        recibo?.CodigoActo === '' ||
+        Number(recibo?.CodigoActo) === 0;
+
+    return esAnillo ? TITULO_RECIBO_ANILLO : TITULO_RECIBO_ACTO;
+};
+
 exports.printReciboPdf = async (req, res) => {
     const { NoRecibo, usuarioReporte } = req.params;
 
@@ -990,6 +1207,8 @@ exports.printReciboPdf = async (req, res) => {
                 r.NoRecibo,
                 r.FeRecibo,
                 r.NuCedula,
+                r.CodigoActo,
+                r.Tipo,
                 c.txnombre AS nombreCliente,
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
@@ -1009,6 +1228,7 @@ exports.printReciboPdf = async (req, res) => {
         }
 
         const recibo = reciboRows[0];
+        const tituloRecibo = tituloDeRecibo(recibo);
 
         const [depositosRows] = await db.query(`
             SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito
@@ -1114,11 +1334,11 @@ exports.printReciboPdf = async (req, res) => {
             doc.font('Helvetica').text(formatMoney(recibo.MnSaldo), marginLeft + labelW, y, { width: valW, lineBreak: false });
         };
 
-        drawReceipt('RECIBO');
-        
+        drawReceipt(tituloRecibo);
+
         // Segunda página para la copia del cliente
         doc.addPage();
-        drawReceipt('RECIBO (COPIA CLIENTE)');
+        drawReceipt(`${tituloRecibo} (COPIA CLIENTE)`);
 
         const range = doc.bufferedPageRange();
         for (let i = range.start; i < (range.start + range.count); i++) {
@@ -1225,6 +1445,8 @@ exports.printReciboPdfOnePage = async (req, res) => {
                 r.NoRecibo,
                 r.FeRecibo,
                 r.NuCedula,
+                r.CodigoActo,
+                r.Tipo,
                 c.txnombre AS nombreCliente,
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
@@ -1244,6 +1466,7 @@ exports.printReciboPdfOnePage = async (req, res) => {
         }
 
         const recibo = reciboRows[0];
+        const tituloRecibo = tituloDeRecibo(recibo);
 
         const [depositosRows] = await db.query(`
             SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito
@@ -1326,7 +1549,7 @@ exports.printReciboPdfOnePage = async (req, res) => {
         };
 
         // 1. Dibujar Recibo Original (Mitad Superior)
-        drawReceipt('RECIBO', 0);
+        drawReceipt(tituloRecibo, 0);
 
         // 2. Línea Punteada de División / Corte en el centro exacto (792 / 2 = 396pt)
         const middleY = 396;
@@ -1340,7 +1563,7 @@ exports.printReciboPdfOnePage = async (req, res) => {
            .restore();
 
         // 3. Dibujar Copia Cliente (Mitad Inferior)
-        drawReceipt('RECIBO (COPIA CLIENTE)', 390);
+        drawReceipt(`${tituloRecibo} (COPIA CLIENTE)`, 390);
 
     } catch (error) {
         console.error('Error generando recibo PDF:', error);
@@ -1382,6 +1605,7 @@ exports.sendReciboEmail = async (req, res) => {
                 r.FeRecibo,
                 r.NuCedula,
                 r.CodigoActo,
+                r.Tipo,
                 c.txnombre AS nombreCliente,
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
@@ -1401,6 +1625,7 @@ exports.sendReciboEmail = async (req, res) => {
         }
 
         const recibo = reciboRows[0];
+        const tituloRecibo = tituloDeRecibo(recibo);
 
         // Consulta de Título y Especialidad desde actosgrados
         let tituloActo = 'N/A';
@@ -1587,7 +1812,7 @@ exports.sendReciboEmail = async (req, res) => {
             };
 
             // DIBUJAR SOLAMENTE LA COPIA DEL CLIENTE
-            drawReceipt('RECIBO');
+            drawReceipt(tituloRecibo);
 
             const range = doc.bufferedPageRange();
             for (let i = range.start; i < (range.start + range.count); i++) {
@@ -1606,7 +1831,7 @@ exports.sendReciboEmail = async (req, res) => {
         const mailOptionsCliente = {
             from: EMAIL_FROM,
             to: emailCliente,
-            subject: `Comprobante de Pago - Recibo N° ${recibo.NoRecibo}`,
+            subject: `${tituloDeRecibo(recibo)} - Recibo N° ${recibo.NoRecibo}`,
             text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\n` +
                   `Adjunto a este correo encontrará su recibo de pago N° ${recibo.NoRecibo}.\n\n` +
                   `Título a Recibir: ${tituloActo}\n` +
@@ -1688,6 +1913,8 @@ exports.sendReciboEmailOnePage = async (req, res) => {
                 r.NoRecibo,
                 r.FeRecibo,
                 r.NuCedula,
+                r.CodigoActo,
+                r.Tipo,
                 c.txnombre AS nombreCliente,
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
@@ -1707,6 +1934,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
         }
 
         const recibo = reciboRows[0];
+        const tituloRecibo = tituloDeRecibo(recibo);
 
         const [depositosRows] = await db.query(`
             SELECT Fecha, TipoOperacion, TxBanco, NuDeposito, MnDeposito
@@ -1859,7 +2087,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
             };
 
             // Dibujar recibo superior (Copia Cliente)
-            drawSingleReceipt('RECIBO - COPIA CLIENTE', 15);
+            drawSingleReceipt(`${tituloRecibo} - COPIA CLIENTE`, 15);
 
             // Línea de corte punteada intermedia ajustada a la mitad de la página vertical (792px / 2 = 396px)
             const lineY = 385;
@@ -1879,7 +2107,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
                });
 
             // Dibujar recibo inferior (Copia Empresa)
-            drawSingleReceipt('RECIBO - COPIA EMPRESA', 405);
+            drawSingleReceipt(`${tituloRecibo} - COPIA EMPRESA`, 405);
 
             doc.end();
         });
@@ -1889,7 +2117,7 @@ exports.sendReciboEmailOnePage = async (req, res) => {
         const mailOptions = {
             from: EMAIL_FROM,
             to: emailCliente,
-            subject: `Comprobante de Pago - Recibo N° ${recibo.NoRecibo}`,
+            subject: `${tituloDeRecibo(recibo)} - Recibo N° ${recibo.NoRecibo}`,
             text: `Estimado(a) ${recibo.nombreCliente || 'Cliente'},\n\nAdjunto a este correo encontrará su recibo de pago N° ${recibo.NoRecibo}.\n\nAtentamente,\nGrado's de Venezuela, C.A.`,
             attachments: [
                 {
