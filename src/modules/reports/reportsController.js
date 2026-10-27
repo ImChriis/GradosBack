@@ -1770,3 +1770,676 @@ exports.generateClosingPdf = async (req, res) => {
         }
     }
 };
+
+// =================================================================
+//  REPORTES DE CONTRATOS DE ANILLOS
+//  Tabla: contratos (Co)  |  LEFT JOIN clientes (Cl)
+//
+//  Se apoyan en el mismo filtro que usa la lista de la interfaz:
+//  InActivo = '0' y MaEstado = <1..7>.
+//
+//  Los montos (mncontrato, mnsaldo, ...) se guardan como texto en
+//  formato venezolano "1.400,00", así que se imprimen tal cual.
+// =================================================================
+
+// MaEstado de la pestaña Estado del contrato de anillos (1..7).
+// 8 = Reclamo y 9 = Anulado quedan fuera a pedido del usuario.
+const ESTADOS_ANILLO = {
+    '1': '1 - En Proceso',
+    '2': '2 - En Fabricación',
+    '3': '3 - Fabricado',
+    '4': '4 - En Engastes',
+    '5': '5 - Por Entregar',
+    '6': '6 - Entregado',
+    '7': '7 - Servicio'
+};
+
+// Columnas de "Contratos por estatus".
+// El ancho es en puntos y la suma es 495, que es el ancho útil de A4 con
+// márgenes de 50. Antes todas las columnas repartían 495 a partes iguales y
+// el N° de contrato y el saldo quedaban demasiado anchos.
+//
+// No lleva columna de estado: el título del reporte ya dice de qué estado se
+// trata, así que repetirlo en cada fila solo desperdiciaba ancho.
+const COLS_ESTADO = [
+    { key: 'NoContrato', label: 'N° CONTRATO', width: 45 },
+    { key: 'Cliente', label: 'CLIENTE', width: 112 },
+    { key: 'NuCedula', label: 'CÉDULA', width: 52 },
+    { key: 'Titulo', label: 'TÍTULO', width: 82 },
+    { key: 'Especialidad', label: 'ESPECIALIDAD', width: 78 },
+    { key: 'FeSolici', label: 'REQUERIDO EL', width: 46, tipo: 'fecha' },
+    { key: 'FeFin', label: 'ENTREGA', width: 46, tipo: 'fecha' },
+    { key: 'MnSaldo', label: 'SALDO', width: 34 }
+];
+
+// Columnas de "Anillos próximos a vencer solicitud".
+// FeSolici es el campo "Requerido el" de la interfaz.
+//
+// Aquí sí se imprime el estado: este reporte mezcla contratos de varios
+// estados, así que el título no alcanza para saberlo.
+const COLS_VENCIMIENTO = [
+    { key: 'NoContrato', label: 'N° CONTRATO', width: 42 },
+    { key: 'Cliente', label: 'CLIENTE', width: 94 },
+    { key: 'NuCedula', label: 'CÉDULA', width: 48 },
+    { key: 'Titulo', label: 'TÍTULO', width: 70 },
+    { key: 'Especialidad', label: 'ESPECIALIDAD', width: 64 },
+    { key: 'Estado', label: 'ESTADO', width: 63 },
+    { key: 'FeSolici', label: 'VENCE EL', width: 40, tipo: 'fecha' },
+    { key: 'MnSaldo', label: 'SALDO', width: 74 }
+];
+
+// Días hacia adelante que mira el reporte de vencimiento
+const DIAS_VENCIMIENTO = 30;
+
+// Límites de la hoja A4 (595 x 842 pt) con los márgenes del documento.
+// Todo el contenido debe caber entre estos valores o pdfkit agrega solo una
+// hoja nueva al final, que es lo que producía las páginas en blanco.
+const PDF_MARGEN_IZQ = 50;
+const PDF_ANCHO_UTIL = 495;
+const PDF_Y_TABLA_INICIO = 135;   // debajo del encabezado
+const PDF_Y_TABLA_FIN = 740;      // de aquí hacia abajo va el pie
+
+// Filas por hoja. Es un tope: si una fila crece mucho por el texto, se cambia
+// de hoja antes de llegar a este número.
+const PDF_FILAS_POR_HOJA = 10;
+
+// `MaEstado` llega como texto y puede venir vacío o nulo en filas
+// antiguas; se etiqueta sin romper si no hay estado.
+const etiquetaEstado = (valor) => {
+    const clave = String(valor ?? '').trim();
+    return ESTADOS_ANILLO[clave] || (clave === '' ? 'SIN ESTADO' : clave);
+};
+
+// Acepta solo el rango 1..7 que existe en el combo de la interfaz
+const estadoValido = (valor) => {
+    const clave = String(valor ?? '').trim();
+    return Object.prototype.hasOwnProperty.call(ESTADOS_ANILLO, clave) ? clave : null;
+};
+
+// `clientes` tiene cédulas repetidas (111 cédulas con más de una fila), así
+// que el JOIN se hace contra una vista resumida que deja UNA fila por cédula.
+// Sin esto el reporte duplicaría contratos: el estado 1 salía 63 en vez de 58.
+//
+// Se excluyen además las cédulas que no son numéricas ('00000000' o basura
+// como 'ASDASDASDA 2'): MySQL las convierte a 0 al compararlas contra el
+// nucedula entero de contratos, y eso emparejaba varios contratos con el
+// mismo cliente.
+const CLIENTES_POR_CEDULA = `
+    LEFT JOIN (
+        SELECT nucedula, MAX(txnombre) AS txnombre
+        FROM clientes
+        WHERE nucedula REGEXP '^[0-9]+$'
+        GROUP BY nucedula
+    ) Cl ON Cl.nucedula = Co.nucedula`;
+
+// Contratos en un estado específico (1..7)
+const SQL_POR_ESTADO = `
+    SELECT Co.NoContrato, Cl.txnombre AS Cliente, Co.nucedula AS NuCedula,
+           Co.titulo AS Titulo, Co.especialidad AS Especialidad,
+           Co.MaEstado, Co.FeSolici, Co.FeFin, Co.mnsaldo AS MnSaldo
+    FROM contratos Co
+    ${CLIENTES_POR_CEDULA}
+    WHERE Co.InActivo = '0' AND Co.MaEstado = ?
+    ORDER BY Co.NoContrato DESC`;
+
+// Anillos cuya fecha "Requerido el" vence dentro de los próximos N días.
+// Solo a futuro: ya vencidos quedan fuera.
+const SQL_VENCIMIENTO = `
+    SELECT Co.NoContrato, Cl.txnombre AS Cliente, Co.nucedula AS NuCedula,
+           Co.titulo AS Titulo, Co.especialidad AS Especialidad,
+           Co.MaEstado, Co.FeSolici, Co.mnsaldo AS MnSaldo
+    FROM contratos Co
+    ${CLIENTES_POR_CEDULA}
+    WHERE Co.InActivo = '0'
+      AND Co.FeSolici >= CURDATE()
+      AND Co.FeSolici <= DATE_ADD(CURDATE(), INTERVAL ? DAY)
+    ORDER BY Co.FeSolici ASC`;
+
+// Etiqueta de estado lista para imprimir, sobre una fila ya consultada
+const aFilaEtiquetada = (fila) => ({ ...fila, Estado: etiquetaEstado(fila.MaEstado) });
+
+// ---------------------------------------------------------------
+//  Encabezado / pie / tabla del PDF
+//  Reutilizado por los dos reportes de anillos.
+// ---------------------------------------------------------------
+const dibujarEncabezado = (doc, logoPath, usuario, tituloReporte) => {
+    try { doc.image(logoPath, 50, 35, { width: 65 }); } catch (e) {}
+
+    doc.fontSize(9).font('Helvetica-Bold')
+        .text("Grado`s de Venezuela, C.A.", 130, 40)
+        .font('Helvetica').text("J-30591547-4", 130, 52);
+
+    const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+    doc.fontSize(8).font('Helvetica')
+        .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+        .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+        .text(`Usuario: ${usuario}`, 350, 60, { align: 'right' });
+
+    doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+    doc.fontSize(12).font('Helvetica-Bold').text(tituloReporte, 50, 95, { align: 'center' });
+    doc.moveTo(50, 120).lineTo(545, 115).lineWidth(0.5).stroke();
+};
+
+// mysql2 entrega las columnas DATE como objetos Date de JavaScript, y al
+// imprimirlos con toString() salía "Mon Jan 01 1900 00:00:00 GMT-0427
+// (Venezuela Time)". Se pasan a dd/mm/yyyy, que es el formato de la interfaz.
+//
+// Las fechas vacías del sistema antiguo son '1900-01-01' (viene del
+// aFechaSQL de ringContractController); esas se muestran en blanco.
+const aFechaTexto = (valor) => {
+    if (valor === null || valor === undefined || valor === '') return '';
+
+    let d;
+    if (valor instanceof Date) {
+        d = valor;
+    } else {
+        const s = String(valor).trim();
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(s);
+    }
+
+    if (isNaN(d.getTime()) || d.getFullYear() <= 1900) return '';
+
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear()}`;
+};
+
+// Los valores vacíos del contrato (sin título, sin entrega, saldo '0,00')
+// se dejan en blanco para que la tabla no se llene de ruido.
+const aTextoCelda = (valor) => {
+    if (valor === null || valor === undefined) return '';
+    return String(valor).trim();
+};
+
+// Un solo punto para convertir una celda a texto. La columna lleva un `tipo`
+// ('fecha' o el valor por omisión 'texto') para que el PDF y el Excel no se
+// desincronicen: antes el PDF imprimía los objetos Date crudos y solo el
+// Excel los formateaba.
+const aValorCelda = (datos, col) =>
+    col.tipo === 'fecha' ? aFechaTexto(datos[col.key]) : aTextoCelda(datos[col.key]);
+
+// Ajusta una celda a su ancho de columna. Como la fuente fija no se puede
+// medir carácter por carácter, se estima con el ancho medio de Helvetica a
+// 7pt y se corta con puntos suspensivos si no cabe. Sin esto un nombre largo
+// se desbordaba sobre la celda de al lado.
+const aCeldaAjustada = (datos, col) => {
+    const texto = aValorCelda(datos, col);
+    // Helvetica 7pt: promedio ~3.4pt por carácter. Se descuentan 8pt de
+    // padding (3 a cada lado) y se deja un margen de seguridad.
+    const caracteres = Math.max(3, Math.floor((col.width - 8) / 3.4));
+
+    if (texto.length <= caracteres) return texto;
+    return `${texto.slice(0, caracteres - 1).trimEnd()}…`;
+};
+
+const dibujarCabeceraTabla = (doc, y, columnas) => {
+    const headerHeight = 20;
+
+    doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+    let headX = PDF_MARGEN_IZQ;
+
+    columnas.forEach((col) => {
+        doc.rect(headX, y, col.width, headerHeight).stroke();
+        doc.text(col.label, headX, y + 5, { width: col.width, align: 'center' });
+        headX += col.width;
+    });
+    return y + headerHeight;
+};
+
+// Dibuja las filas de una tabla de reporte y devuelve la Y en la que quedó.
+//
+// El salto de hoja se decide por ALTURA, no por número de fila. Antes se
+// cambiaba de hoja cada 20 filas sin mirar cuánto crecía cada una; como los
+// nombres largos y las fechas mal formateadas hacían crecer las filas, la
+// tabla se salía del margen inferior y pdfkit agregaba hojas vacías al final.
+const dibujarFilas = (doc, yInicial, columnas, rows, usuario, titulo) => {
+    let y = yInicial;
+    let enPaginaActual = 0;
+
+    rows.forEach((fila, index) => {
+        const datos = aFilaEtiquetada(fila);
+
+        // Alto de la fila: el mínimo son 20pt y crece si una celda necesita
+        // más de una línea. Se mide sobre el texto ya ajustado al ancho.
+        let altoFila = 20;
+        columnas.forEach((col) => {
+            const texto = aCeldaAjustada(datos, col);
+            const alto = doc.heightOfString(texto, { width: col.width - 6 });
+            if (alto + 8 > altoFila) altoFila = alto + 8;
+        });
+
+        // ¿Cabe en la hoja actual? Si no, se cambia de hoja y se repite el
+        // encabezado. El tope de PDF_FILAS_POR_HOJA evita hojas casi vacías
+        // cuando la fila es muy alta.
+        if (enPaginaActual > 0 &&
+            (y + altoFila > PDF_Y_TABLA_FIN || enPaginaActual >= PDF_FILAS_POR_HOJA)) {
+            doc.addPage();
+            dibujarEncabezado(doc, path.join(__dirname, 'logo.png'), usuario, titulo);
+            y = dibujarCabeceraTabla(doc, PDF_Y_TABLA_INICIO, columnas);
+            doc.font('Helvetica').fontSize(7);
+            enPaginaActual = 0;
+        }
+
+        if ((index + 1) % 2 === 0) {
+            doc.fillColor('#FFFFE0').rect(PDF_MARGEN_IZQ, y, PDF_ANCHO_UTIL, altoFila).fill();
+        }
+
+        doc.fillColor('#000000');
+        let rX = PDF_MARGEN_IZQ;
+        columnas.forEach((col) => {
+            const texto = aCeldaAjustada(datos, col);
+            doc.rect(rX, y, col.width, altoFila).stroke();
+            doc.text(texto, rX + 3, y + 5, { width: col.width - 6, align: 'left' });
+            rX += col.width;
+        });
+
+        y += altoFila;
+        enPaginaActual++;
+    });
+
+    return y;
+};
+
+// Pie de todas las hojas. lineBreak evita que pdfkit agregue una hoja extra
+// al calcular que el texto del pie no cabe en la hoja actual.
+const dibujarPie = (doc) => {
+    const range = doc.bufferedPageRange();
+
+    for (let i = range.start; i < (range.start + range.count); i++) {
+        doc.switchToPage(i);
+
+        const footerBaseY = 750;
+        doc.moveTo(PDF_MARGEN_IZQ, footerBaseY)
+           .lineTo(PDF_MARGEN_IZQ + PDF_ANCHO_UTIL, footerBaseY)
+           .lineWidth(0.5).stroke();
+
+        doc.fontSize(9).font('Helvetica').fillColor('#000000');
+        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla",
+            PDF_MARGEN_IZQ, footerBaseY + 10,
+            { align: 'center', width: PDF_ANCHO_UTIL, lineBreak: false });
+        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com",
+            PDF_MARGEN_IZQ, footerBaseY + 22,
+            { align: 'center', width: PDF_ANCHO_UTIL, lineBreak: false });
+
+        doc.fontSize(8).font('Helvetica-Bold')
+            .text(`Página ${i + 1} / ${range.count}`, PDF_MARGEN_IZQ, 780,
+                { align: 'right', width: PDF_ANCHO_UTIL, lineBreak: false });
+    }
+};
+
+// ----------------------------------------------------------------
+//  Contratos por estatus (PDF y Excel)
+//  POST { usuarioReporte, estado: '1'..'7' }
+// ----------------------------------------------------------------
+exports.contractsByStatusPdf = async (req, res) => {
+    const { usuarioReporte, estado } = req.body;
+
+    const estadoLimpio = estadoValido(estado);
+    if (!estadoLimpio) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'Estado inválido. Use un valor entre 1 y 7.'
+        });
+    }
+
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 50, left: 50, right: 50 },
+        bufferPages: true
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename=contratos-por-estado.pdf');
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    const columnas = COLS_ESTADO;
+    const tituloReporte = `Contratos de Anillo - ${ESTADOS_ANILLO[estadoLimpio]}`;
+
+    try {
+        const [rows] = await db.query(SQL_POR_ESTADO, [estadoLimpio]);
+
+        dibujarEncabezado(doc, logoPath, usuarioReporte, tituloReporte);
+
+        let currentY = dibujarCabeceraTabla(doc, PDF_Y_TABLA_INICIO, columnas);
+        doc.font('Helvetica').fontSize(7);
+
+        currentY = dibujarFilas(doc, currentY, columnas, rows, usuarioReporte, tituloReporte);
+
+        // Si la última fila llegó al límite, se cambia de hoja antes de
+        // escribir el total para que no se pise con el pie.
+        if (currentY + 30 > PDF_Y_TABLA_FIN) {
+            doc.addPage();
+            dibujarEncabezado(doc, logoPath, usuarioReporte, tituloReporte);
+            currentY = PDF_Y_TABLA_INICIO;
+        }
+
+        doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
+            .text(`Total de contratos: ${rows.length}`, PDF_MARGEN_IZQ, currentY + 10, { align: 'left' });
+
+        dibujarPie(doc);
+    } catch (err) {
+        console.error(err);
+        if (!res.headersSent) {
+            res.status(500).json({ status: 'error', message: 'Error interno al generar el reporte.' });
+        }
+    }
+    doc.end();
+};
+
+exports.contractsByStatusExcel = async (req, res) => {
+    try {
+        const { usuarioReporte, estado } = req.body;
+
+        const estadoLimpio = estadoValido(estado);
+        if (!estadoLimpio) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Estado inválido. Use un valor entre 1 y 7.'
+            });
+        }
+
+        const [rows] = await db.query(SQL_POR_ESTADO, [estadoLimpio]);
+        const columnas = COLS_ESTADO;
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Contratos por Estatus');
+        const lastColChar = String.fromCharCode(64 + columnas.length);
+
+        const logoPath = path.join(__dirname, 'logo.png');
+        try {
+            const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+            worksheet.addImage(logoId, {
+                tl: { col: 0.2, row: 1.2 },
+                ext: { width: 60, height: 40 },
+                editAs: 'onCell'
+            });
+        } catch (e) {}
+
+        worksheet.getRow(2).height = 50;
+
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+        const metaCell = worksheet.getCell(`${lastColChar}2`);
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        for (let i = 1; i <= columnas.length; i++) {
+            worksheet.getCell(`${String.fromCharCode(64 + i)}5`).border = { bottom: { style: 'thin' } };
+        }
+
+        worksheet.mergeCells(`A6:${lastColChar}6`);
+        const titleCell = worksheet.getCell('A6');
+        titleCell.value = `Contratos de Anillo - ${ESTADOS_ANILLO[estadoLimpio]}`;
+        titleCell.font = { name: 'Arial', bold: true, size: 13 };
+        titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+        for (let i = 1; i <= columnas.length; i++) {
+            worksheet.getCell(`${String.fromCharCode(64 + i)}6`).border = { bottom: { style: 'thin' } };
+        }
+
+        const headerRowNumber = 8;
+        worksheet.columns = columnas.map(col => ({ key: col.key, width: col.width }));
+
+        const headerRow = worksheet.getRow(headerRowNumber);
+        headerRow.values = columnas.map(c => c.label);
+        headerRow.eachCell((cell) => {
+            cell.font = { bold: true, size: 10 };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+                top: { style: 'thin' }, left: { style: 'thin' },
+                bottom: { style: 'thin' }, right: { style: 'thin' }
+            };
+        });
+
+        let currentRow = headerRowNumber + 1;
+        rows.forEach((fila, index) => {
+            const datos = aFilaEtiquetada(fila);
+            // ExcelJS guarda un objeto Date tal cual y Excel lo muestra con el
+            // formato del sistema; las fechas se pasan a dd/mm/yyyy igual que
+            // en el PDF.
+            const row = worksheet.addRow(columnas.map(col => aValorCelda(datos, col)));
+
+            const esPar = (index + 1) % 2 === 0;
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: 'thin' }, left: { style: 'thin' },
+                    bottom: { style: 'thin' }, right: { style: 'thin' }
+                };
+                cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+                if (esPar) {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFE0' } };
+                }
+            });
+            currentRow++;
+        });
+
+        const lastDataRow = currentRow - 1;
+        for (let i = 1; i <= columnas.length; i++) {
+            const cell = worksheet.getCell(`${String.fromCharCode(64 + i)}${lastDataRow}`);
+            cell.border = { ...cell.border, bottom: { style: 'thin' } };
+        }
+
+        const lineSeparatorRow = currentRow + 1;
+        for (let i = 1; i <= columnas.length; i++) {
+            worksheet.getCell(`${String.fromCharCode(64 + i)}${lineSeparatorRow}`).border = { bottom: { style: 'thin' } };
+        }
+
+        const footerStart = lineSeparatorRow + 1;
+        worksheet.mergeCells(`A${footerStart}:${lastColChar}${footerStart}`);
+        worksheet.mergeCells(`A${footerStart + 1}:${lastColChar}${footerStart + 1}`);
+
+        const f1 = worksheet.getCell(`A${footerStart}`);
+        const f2 = worksheet.getCell(`A${footerStart + 1}`);
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+        [f1, f2].forEach(c => {
+            c.alignment = { horizontal: 'center' };
+            c.font = { name: 'Arial', size: 9 };
+        });
+
+        const totalRow = footerStart + 3;
+        worksheet.mergeCells(`A${totalRow}:${lastColChar}${totalRow}`);
+        const totalCell = worksheet.getCell(`A${totalRow}`);
+        totalCell.value = `Total de contratos: ${rows.length}`;
+        totalCell.font = { name: 'Arial', bold: true, size: 10 };
+        totalCell.alignment = { horizontal: 'left' };
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=contratos-por-estado.xlsx');
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error(err);
+        if (!res.headersSent) {
+            res.status(500).json({ status: 'error', message: 'Error interno al generar el reporte.' });
+        }
+    }
+};
+
+// ----------------------------------------------------------------
+//  Anillos próximos a vencer solicitud (PDF y Excel)
+//  Lista los contratos cuyo "Requerido el" (FeSolici) vence dentro
+//  de los próximos DIAS_VENCIMIENTO días. Solo a futuro.
+// ----------------------------------------------------------------
+exports.ringExpiringPdf = async (req, res) => {
+    const { usuarioReporte } = req.body;
+
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 50, left: 50, right: 50 },
+        bufferPages: true
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename=anillos-por-vencer.pdf');
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    const columnas = COLS_VENCIMIENTO;
+    const tituloReporte = `Anillos Próximos a Vencer Solicitud (${DIAS_VENCIMIENTO} días)`;
+
+    try {
+        const [rows] = await db.query(SQL_VENCIMIENTO, [DIAS_VENCIMIENTO]);
+
+        dibujarEncabezado(doc, logoPath, usuarioReporte, tituloReporte);
+
+        let currentY = dibujarCabeceraTabla(doc, PDF_Y_TABLA_INICIO, columnas);
+        doc.font('Helvetica').fontSize(7);
+
+        currentY = dibujarFilas(doc, currentY, columnas, rows, usuarioReporte, tituloReporte);
+
+        if (currentY + 30 > PDF_Y_TABLA_FIN) {
+            doc.addPage();
+            dibujarEncabezado(doc, logoPath, usuarioReporte, tituloReporte);
+            currentY = PDF_Y_TABLA_INICIO;
+        }
+
+        doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
+            .text(`Total de contratos: ${rows.length}`, PDF_MARGEN_IZQ, currentY + 10, { align: 'left' });
+
+        dibujarPie(doc);
+    } catch (err) {
+        console.error(err);
+        if (!res.headersSent) {
+            res.status(500).json({ status: 'error', message: 'Error interno al generar el reporte.' });
+        }
+    }
+    doc.end();
+};
+
+exports.ringExpiringExcel = async (req, res) => {
+    try {
+        const { usuarioReporte } = req.body;
+
+        const [rows] = await db.query(SQL_VENCIMIENTO, [DIAS_VENCIMIENTO]);
+        const columnas = COLS_VENCIMIENTO;
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Anillos por Vencer');
+        const lastColChar = String.fromCharCode(64 + columnas.length);
+
+        const logoPath = path.join(__dirname, 'logo.png');
+        try {
+            const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+            worksheet.addImage(logoId, {
+                tl: { col: 0.2, row: 1.2 },
+                ext: { width: 60, height: 40 },
+                editAs: 'onCell'
+            });
+        } catch (e) {}
+
+        worksheet.getRow(2).height = 50;
+
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+        const metaCell = worksheet.getCell(`${lastColChar}2`);
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        for (let i = 1; i <= columnas.length; i++) {
+            worksheet.getCell(`${String.fromCharCode(64 + i)}5`).border = { bottom: { style: 'thin' } };
+        }
+
+        worksheet.mergeCells(`A6:${lastColChar}6`);
+        const titleCell = worksheet.getCell('A6');
+        titleCell.value = `Anillos Próximos a Vencer Solicitud (${DIAS_VENCIMIENTO} días)`;
+        titleCell.font = { name: 'Arial', bold: true, size: 13 };
+        titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+        for (let i = 1; i <= columnas.length; i++) {
+            worksheet.getCell(`${String.fromCharCode(64 + i)}6`).border = { bottom: { style: 'thin' } };
+        }
+
+        const headerRowNumber = 8;
+        worksheet.columns = columnas.map(col => ({ key: col.key, width: col.width }));
+
+        const headerRow = worksheet.getRow(headerRowNumber);
+        headerRow.values = columnas.map(c => c.label);
+        headerRow.eachCell((cell) => {
+            cell.font = { bold: true, size: 10 };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+                top: { style: 'thin' }, left: { style: 'thin' },
+                bottom: { style: 'thin' }, right: { style: 'thin' }
+            };
+        });
+
+        let currentRow = headerRowNumber + 1;
+        rows.forEach((fila, index) => {
+            const datos = aFilaEtiquetada(fila);
+            // ExcelJS guarda un objeto Date tal cual y Excel lo muestra con el
+            // formato del sistema; las fechas se pasan a dd/mm/yyyy igual que
+            // en el PDF.
+            const row = worksheet.addRow(columnas.map(col => aValorCelda(datos, col)));
+
+            const esPar = (index + 1) % 2 === 0;
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: 'thin' }, left: { style: 'thin' },
+                    bottom: { style: 'thin' }, right: { style: 'thin' }
+                };
+                cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+                if (esPar) {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFE0' } };
+                }
+            });
+            currentRow++;
+        });
+
+        const lastDataRow = currentRow - 1;
+        for (let i = 1; i <= columnas.length; i++) {
+            const cell = worksheet.getCell(`${String.fromCharCode(64 + i)}${lastDataRow}`);
+            cell.border = { ...cell.border, bottom: { style: 'thin' } };
+        }
+
+        const lineSeparatorRow = currentRow + 1;
+        for (let i = 1; i <= columnas.length; i++) {
+            worksheet.getCell(`${String.fromCharCode(64 + i)}${lineSeparatorRow}`).border = { bottom: { style: 'thin' } };
+        }
+
+        const footerStart = lineSeparatorRow + 1;
+        worksheet.mergeCells(`A${footerStart}:${lastColChar}${footerStart}`);
+        worksheet.mergeCells(`A${footerStart + 1}:${lastColChar}${footerStart + 1}`);
+
+        const f1 = worksheet.getCell(`A${footerStart}`);
+        const f2 = worksheet.getCell(`A${footerStart + 1}`);
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+        [f1, f2].forEach(c => {
+            c.alignment = { horizontal: 'center' };
+            c.font = { name: 'Arial', size: 9 };
+        });
+
+        const totalRow = footerStart + 3;
+        worksheet.mergeCells(`A${totalRow}:${lastColChar}${totalRow}`);
+        const totalCell = worksheet.getCell(`A${totalRow}`);
+        totalCell.value = `Total de contratos: ${rows.length}`;
+        totalCell.font = { name: 'Arial', bold: true, size: 10 };
+        totalCell.alignment = { horizontal: 'left' };
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=anillos-por-vencer.xlsx');
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error(err);
+        if (!res.headersSent) {
+            res.status(500).json({ status: 'error', message: 'Error interno al generar el reporte.' });
+        }
+    }
+};

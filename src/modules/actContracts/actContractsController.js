@@ -1114,7 +1114,12 @@ const tituloDeRecibo = (recibo) => {
         recibo?.CodigoActo === '' ||
         Number(recibo?.CodigoActo) === 0;
 
-    return esAnillo ? TITULO_RECIBO_ANILLO : TITULO_RECIBO_ACTO;
+    const titulo = esAnillo ? TITULO_RECIBO_ANILLO : TITULO_RECIBO_ACTO;
+
+    // Anulado es varchar(1): '1' = anulado, '0' = vigente.
+    const esAnulado = String(recibo?.Anulado ?? '') === '1';
+
+    return esAnulado ? `${titulo} (ANULADO)` : titulo;
 };
 
 exports.printReciboPdf = async (req, res) => {
@@ -1213,7 +1218,8 @@ exports.printReciboPdf = async (req, res) => {
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
                 r.mnsaldorec AS MnSaldo,
-                r.NoContrato
+                r.NoContrato,
+                r.Anulado
             FROM ReciboPago r
             LEFT JOIN clientes c ON c.NuCedula = r.NuCedula
             WHERE r.NoRecibo = ?
@@ -1451,7 +1457,8 @@ exports.printReciboPdfOnePage = async (req, res) => {
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
                 r.mnsaldorec AS MnSaldo,
-                r.NoContrato
+                r.NoContrato,
+                r.Anulado
             FROM ReciboPago r
             LEFT JOIN clientes c ON c.NuCedula = r.NuCedula
             WHERE r.NoRecibo = ?
@@ -1610,7 +1617,8 @@ exports.sendReciboEmail = async (req, res) => {
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
                 r.mnsaldorec AS MnSaldo,
-                r.NoContrato
+                r.NoContrato,
+                r.Anulado
             FROM ReciboPago r
             LEFT JOIN clientes c ON c.NuCedula = r.NuCedula
             WHERE r.NoRecibo = ?
@@ -1919,7 +1927,8 @@ exports.sendReciboEmailOnePage = async (req, res) => {
                 r.txconceprec AS Motivo,
                 r.mnrecibo AS MnPagado,
                 r.mnsaldorec AS MnSaldo,
-                r.NoContrato
+                r.NoContrato,
+                r.Anulado
             FROM ReciboPago r
             LEFT JOIN clientes c ON c.NuCedula = r.NuCedula
             WHERE r.NoRecibo = ?

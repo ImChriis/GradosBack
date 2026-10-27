@@ -15,4 +15,10 @@ router.post('/actListExcel', reportsController.actListExcel);
 router.post('/actListTxt', reportsController.actListTxt);
 router.post('/generateClosingPdf', reportsController.generateClosingPdf);
 
+// Contratos de anillos
+router.post('/contractsByStatusPdf', reportsController.contractsByStatusPdf);
+router.post('/contractsByStatusExcel', reportsController.contractsByStatusExcel);
+router.post('/ringExpiringPdf', reportsController.ringExpiringPdf);
+router.post('/ringExpiringExcel', reportsController.ringExpiringExcel);
+
 module.exports = router;
