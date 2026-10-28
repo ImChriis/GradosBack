@@ -1802,14 +1802,14 @@ const ESTADOS_ANILLO = {
 // No lleva columna de estado: el título del reporte ya dice de qué estado se
 // trata, así que repetirlo en cada fila solo desperdiciaba ancho.
 const COLS_ESTADO = [
-    { key: 'NoContrato', label: 'N° CONTRATO', width: 45 },
-    { key: 'Cliente', label: 'CLIENTE', width: 112 },
-    { key: 'NuCedula', label: 'CÉDULA', width: 52 },
-    { key: 'Titulo', label: 'TÍTULO', width: 82 },
-    { key: 'Especialidad', label: 'ESPECIALIDAD', width: 78 },
-    { key: 'FeSolici', label: 'REQUERIDO EL', width: 46, tipo: 'fecha' },
-    { key: 'FeFin', label: 'ENTREGA', width: 46, tipo: 'fecha' },
-    { key: 'MnSaldo', label: 'SALDO', width: 34 }
+    { key: 'NoContrato', label: 'CONTRATO', width: 45, excelWidth: 15 },
+    { key: 'Cliente', label: 'CLIENTE', width: 112, excelWidth: 40 },
+    { key: 'NuCedula', label: 'CÉDULA', width: 52, excelWidth: 15 },
+    { key: 'Titulo', label: 'TÍTULO', width: 82, excelWidth: 30 },
+    { key: 'Especialidad', label: 'ESPECIALIDAD', width: 78, excelWidth: 30 },
+    { key: 'FeSolici', label: 'REQUIERE', width: 46, excelWidth: 15, tipo: 'fecha' },
+    { key: 'FeFin', label: 'ENTREGA', width: 46, excelWidth: 15, tipo: 'fecha' },
+    { key: 'MnSaldo', label: 'SALDO', width: 34, excelWidth: 15 }
 ];
 
 // Columnas de "Anillos próximos a vencer solicitud".
@@ -1818,14 +1818,14 @@ const COLS_ESTADO = [
 // Aquí sí se imprime el estado: este reporte mezcla contratos de varios
 // estados, así que el título no alcanza para saberlo.
 const COLS_VENCIMIENTO = [
-    { key: 'NoContrato', label: 'N° CONTRATO', width: 42 },
-    { key: 'Cliente', label: 'CLIENTE', width: 94 },
-    { key: 'NuCedula', label: 'CÉDULA', width: 48 },
-    { key: 'Titulo', label: 'TÍTULO', width: 70 },
-    { key: 'Especialidad', label: 'ESPECIALIDAD', width: 64 },
-    { key: 'Estado', label: 'ESTADO', width: 63 },
-    { key: 'FeSolici', label: 'VENCE EL', width: 40, tipo: 'fecha' },
-    { key: 'MnSaldo', label: 'SALDO', width: 74 }
+    { key: 'NoContrato', label: 'CONTRATO', width: 42, excelWidth: 15 },
+    { key: 'Cliente', label: 'CLIENTE', width: 94, excelWidth: 40 },
+    { key: 'NuCedula', label: 'CÉDULA', width: 48, excelWidth: 15 },
+    { key: 'Titulo', label: 'TÍTULO', width: 70, excelWidth: 30 },
+    { key: 'Especialidad', label: 'ESPECIALIDAD', width: 64, excelWidth: 30 },
+    { key: 'Estado', label: 'ESTADO', width: 63, excelWidth: 20 },
+    { key: 'FeSolici', label: 'VENCE', width: 40, excelWidth: 15, tipo: 'fecha' },
+    { key: 'MnSaldo', label: 'SALDO', width: 74, excelWidth: 15 }
 ];
 
 // Días hacia adelante que mira el reporte de vencimiento
@@ -1841,7 +1841,7 @@ const PDF_Y_TABLA_FIN = 740;      // de aquí hacia abajo va el pie
 
 // Filas por hoja. Es un tope: si una fila crece mucho por el texto, se cambia
 // de hoja antes de llegar a este número.
-const PDF_FILAS_POR_HOJA = 10;
+const PDF_FILAS_POR_HOJA = 20;
 
 // `MaEstado` llega como texto y puede venir vacío o nulo en filas
 // antiguas; se etiqueta sin romper si no hay estado.
@@ -1975,14 +1975,22 @@ const aCeldaAjustada = (datos, col) => {
 };
 
 const dibujarCabeceraTabla = (doc, y, columnas) => {
-    const headerHeight = 20;
+    const paddingHorizontal = 6;
+    const paddingVertical = 6;
 
-    doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+    doc.fillColor('#000000').fontSize(7).font('Helvetica-Bold');
+    const headerHeight = Math.max(20, ...columnas.map((col) =>
+        doc.heightOfString(col.label, { width: col.width - paddingHorizontal }) + paddingVertical
+    ));
     let headX = PDF_MARGEN_IZQ;
 
     columnas.forEach((col) => {
         doc.rect(headX, y, col.width, headerHeight).stroke();
-        doc.text(col.label, headX, y + 5, { width: col.width, align: 'center' });
+        doc.text(col.label, headX + 3, y + 3, {
+            width: col.width - paddingHorizontal,
+            align: 'center',
+            lineGap: 0
+        });
         headX += col.width;
     });
     return y + headerHeight;
@@ -2006,7 +2014,7 @@ const dibujarFilas = (doc, yInicial, columnas, rows, usuario, titulo) => {
         let altoFila = 20;
         columnas.forEach((col) => {
             const texto = aCeldaAjustada(datos, col);
-            const alto = doc.heightOfString(texto, { width: col.width - 6 });
+            const alto = doc.heightOfString(texto, { width: col.width - 6, lineGap: 0 });
             if (alto + 8 > altoFila) altoFila = alto + 8;
         });
 
@@ -2031,7 +2039,11 @@ const dibujarFilas = (doc, yInicial, columnas, rows, usuario, titulo) => {
         columnas.forEach((col) => {
             const texto = aCeldaAjustada(datos, col);
             doc.rect(rX, y, col.width, altoFila).stroke();
-            doc.text(texto, rX + 3, y + 5, { width: col.width - 6, align: 'left' });
+            doc.text(texto, rX + 3, y + 4, {
+                width: col.width - 6,
+                align: 'left',
+                lineGap: 0
+            });
             rX += col.width;
         });
 
@@ -2187,7 +2199,7 @@ exports.contractsByStatusExcel = async (req, res) => {
         }
 
         const headerRowNumber = 8;
-        worksheet.columns = columnas.map(col => ({ key: col.key, width: col.width }));
+        worksheet.columns = columnas.map(col => ({ key: col.key, width: col.excelWidth }));
 
         const headerRow = worksheet.getRow(headerRowNumber);
         headerRow.values = columnas.map(c => c.label);
@@ -2366,7 +2378,7 @@ exports.ringExpiringExcel = async (req, res) => {
         }
 
         const headerRowNumber = 8;
-        worksheet.columns = columnas.map(col => ({ key: col.key, width: col.width }));
+        worksheet.columns = columnas.map(col => ({ key: col.key, width: col.excelWidth }));
 
         const headerRow = worksheet.getRow(headerRowNumber);
         headerRow.values = columnas.map(c => c.label);
