@@ -23,7 +23,7 @@ exports.updateSettings = async (req, res) => {
         PcOro18, PcOro14, PcOro10, MnMerma, MnCostOro, 
         Impuesto, MnCostoMano, UbicacionLogo, UbicacionRpt, 
         TxMensaje1, TxMensaje2, TxMensaje3, 
-        GeneraNoRecibo, GeneraNoContrato, GeneraNoActo, GeneraNoCierre, NoCierre
+        GeneraNoRecibo, GeneraNoContrato, GeneraNoActo, GeneraNoCierre, NoCierreZ, NoCierreX
     } = req.body;
 
     try {
@@ -37,7 +37,7 @@ exports.updateSettings = async (req, res) => {
                 PcOro18 = ?, PcOro14 = ?, PcOro10 = ?, MnMerma = ?, MnCostOro = ?, 
                 Impuesto = ?, MnCostoMano = ?, UbicacionLogo = ?, UbicacionRpt = ?, 
                 TxMensaje1 = ?, TxMensaje2 = ?, TxMensaje3 = ?, 
-                GeneraNoRecibo = ?, GeneraNoContrato = ?, GeneraNoActo = ?, GeneraNoCierre = ?, NoCierre = ?
+                GeneraNoRecibo = ?, GeneraNoContrato = ?, GeneraNoActo = ?, GeneraNoCierre = ?, NoCierreZ = ?, NoCierreX = ?
             WHERE Id = ?`;
 
         const [result] = await db.query(sql, [
@@ -51,7 +51,8 @@ exports.updateSettings = async (req, res) => {
             GeneraNoContrato ? 'S' : 'N',
             GeneraNoActo ? 'S' : 'N',
             GeneraNoCierre ? 'S' : 'N',
-            NoCierre,
+            NoCierreZ,
+            NoCierreX,
             id // El ID de la URL para el WHERE
         ]);
 
@@ -77,7 +78,8 @@ exports.updateSettings = async (req, res) => {
                 GeneraNoContrato: GeneraNoContrato ? 'S' : 'N',
                 GeneraNoActo: GeneraNoActo ? 'S' : 'N',
                 GeneraNoCierre: GeneraNoCierre ? 'S' : 'N',
-                NoCierre
+                NoCierreZ,
+                NoCierreX
             }
         });
 

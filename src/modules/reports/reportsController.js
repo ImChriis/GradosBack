@@ -3,6 +3,7 @@ const ExcelJS = require('exceljs');
 const path = require('path');
 const db = require('../../config/db');
 const audit = require('../audit/auditService');
+const { hoyVenezuela, aDMY, fechaPendienteZ } = require('./cierreZGuard');
 
 const getFechaHoraVenezuela = () => {
     const ahora = new Date();
@@ -1420,23 +1421,476 @@ exports.actListTxt = async (req, res) => {
     }
 };
 
-exports.generateClosingPdf = async (req, res) => {
-    const { ferecibo, NoCierre, usuarioReporte } = req.body;
+// Totales por acto/método y detalle de depósitos de un cierre.
+// `filtro` es la condición sobre depositos (d), p. ej. 'd.NoCierreZ = ?'.
+const consultarCierre = async (conn, filtro, params) => {
+    const [totalesPorActoYMetodo] = await conn.query(
+        `SELECT 
+            r.CodigoActo,
+            COALESCE(ag.Titulo, 'ACTO NO ESPECIFICADO') AS TituloActo,
+            COALESCE(NULLIF(d.TipoOperacion, ''), 'NO ESPECIFICADO') AS metodoPago,
+            COUNT(d.id) AS cantidadOperaciones,
+            SUM(CAST(d.MnDeposito AS DECIMAL(12,2))) AS totalMetodo
+         FROM depositos d
+         INNER JOIN recibopago r ON d.NoRecibo = r.NoRecibo
+         LEFT JOIN actosgrados ag ON r.CodigoActo = ag.CodigoActo
+         WHERE ${filtro}
+         GROUP BY r.CodigoActo, ag.Titulo, COALESCE(NULLIF(d.TipoOperacion, ''), 'NO ESPECIFICADO')
+         ORDER BY r.CodigoActo ASC, totalMetodo DESC`,
+        params
+    );
 
-    if (!ferecibo || !NoCierre) {
+    const [detalleDepositos] = await conn.query(
+        `SELECT 
+            d.NoContrato,
+            d.NoRecibo, 
+            d.NuCedula, 
+            r.CodigoActo,
+            d.TipoOperacion AS metodoPago, 
+            d.TxBanco, 
+            d.NuDeposito AS referencia, 
+            d.MnDeposito AS monto
+         FROM depositos d
+         INNER JOIN recibopago r ON d.NoRecibo = r.NoRecibo
+         WHERE ${filtro}
+         ORDER BY r.CodigoActo ASC, d.NoRecibo ASC`,
+        params
+    );
+
+    return { totalesPorActoYMetodo, detalleDepositos };
+};
+
+const totalCierre = ({ totalesPorActoYMetodo }) =>
+    totalesPorActoYMetodo.reduce((acc, t) => acc + Number(t.totalMetodo || 0), 0);
+
+// 'YYYY-MM-DD HH:mm:ss' en hora de Venezuela
+const ahoraVenezuela = () => new Date().toLocaleString('sv-SE', { timeZone: 'America/Caracas' });
+
+// Arma y envía el PDF de un cierre (X o Z).
+// Agrupa los totales por acto (o anillos) y método de pago. Lo usan el PDF y el Excel.
+const agruparCierre = (totalesPorActoYMetodo) => {
+    const resumenPorActo = {};
+    let totalGeneralCierre = 0;
+    let totalOperacionesCierre = 0;
+
+    totalesPorActoYMetodo.forEach(item => {
+        // Recibos sin CodigoActo son de contratos de anillos
+        const cod = item.CodigoActo || 'ANILLOS';
+        if (!resumenPorActo[cod]) {
+            resumenPorActo[cod] = {
+                codigoActo: cod,
+                tituloActo: item.TituloActo,
+                metodos: [],
+                totalActo: 0,
+                operacionesActo: 0
+            };
+        }
+        const monto = Number(item.totalMetodo || 0);
+        const cant = Number(item.cantidadOperaciones || 0);
+
+        resumenPorActo[cod].metodos.push({
+            metodo: item.metodoPago,
+            cantidad: cant,
+            monto: monto
+        });
+
+        resumenPorActo[cod].totalActo += monto;
+        resumenPorActo[cod].operacionesActo += cant;
+
+        totalGeneralCierre += monto;
+        totalOperacionesCierre += cant;
+    });
+
+    return { resumenPorActo, totalGeneralCierre, totalOperacionesCierre };
+};
+
+const etiquetaGrupo = (acto) =>
+    acto.codigoActo === 'ANILLOS' ? 'CONTRATOS DE ANILLOS' : `ACTO ${acto.codigoActo}: ${acto.tituloActo.toUpperCase()}`;
+
+const enviarPdfCierre = (res, { titulo, subtitulo, filename, usuarioReporte, totalesPorActoYMetodo, detalleDepositos }) => {
+    // 4. AGRUPACIÓN DE DATOS
+    const { resumenPorActo, totalGeneralCierre, totalOperacionesCierre } = agruparCierre(totalesPorActoYMetodo);
+
+    // 5. CONSTRUCCIÓN DEL PDF
+    // Ajustamos autoFirstPage y autoPageBreak para evitar que PDFKit cree páginas no deseadas
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 40, left: 50, right: 50 },
+        bufferPages: true,
+        autoFirstPage: true
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=${filename}`);
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    const tableWidth = 495;
+    const MAX_Y = 710; // Umbral de seguridad para salto manual de página
+
+    const addHeader = (doc) => {
+        try {
+            doc.image(logoPath, 50, 35, { width: 65 });
+        } catch (error) {
+            // Silencioso si la imagen no existe
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
+
+        const { fechaActual: fechaImpresion, horaActual } = getFechaHoraVenezuela();
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha Impresión: ${fechaImpresion}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuarioReporte || 'SISTEMA'}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        
+        const fullTitle = titulo;
+        doc.fontSize(11).font('Helvetica-Bold').text(fullTitle, 50, 95, { align: 'center', width: tableWidth });
+        
+        doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+    };
+
+    addHeader(doc);
+
+    let currentY = 125;
+
+    // Subtítulo
+    doc.fontSize(8).font('Helvetica-Bold').fillColor('#333333');
+    doc.text(subtitulo, 50, currentY);
+    currentY += 20;
+
+    // --- RESUMEN POR ACTO ---
+    let actosEnPaginaActual = 0;
+    const maxActosPorPagina = 5;
+
+    Object.values(resumenPorActo).forEach(acto => {
+        const alturaAproxActo = 12 + 16 + (acto.metodos.length * 16) + 18 + 15;
+
+        if (currentY + alturaAproxActo > MAX_Y || actosEnPaginaActual >= maxActosPorPagina) {
+            doc.addPage();
+            addHeader(doc);
+            currentY = 130;
+            actosEnPaginaActual = 0;
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
+        doc.text(etiquetaGrupo(acto), 50, currentY);
+        currentY += 12;
+
+        doc.rect(50, currentY, tableWidth, 16).fillAndStroke('#EAEAEA', '#000000');
+        doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+        doc.text("MÉTODO DE PAGO", 60, currentY + 4, { width: 230, lineBreak: false });
+        doc.text("CANT. OP.", 290, currentY + 4, { width: 80, align: 'center', lineBreak: false });
+        doc.text("SUBTOTAL", 380, currentY + 4, { width: 155, align: 'right', lineBreak: false });
+        currentY += 16;
+
+        acto.metodos.forEach((m, idx) => {
+            const rowH = 16;
+            if ((idx + 1) % 2 === 0) {
+                doc.fillColor('#FAFAFA').rect(50, currentY, tableWidth, rowH).fill();
+            }
+
+            doc.fillColor('#000000').font('Helvetica').fontSize(8);
+            doc.rect(50, currentY, tableWidth, rowH).stroke();
+
+            doc.text(m.metodo.toUpperCase(), 60, currentY + 4, { width: 230, lineBreak: false });
+            doc.text(m.cantidad.toString(), 290, currentY + 4, { width: 80, align: 'center', lineBreak: false });
+            doc.text(m.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 4, { width: 155, align: 'right', lineBreak: false });
+
+            currentY += rowH;
+        });
+
+        // Subtotal
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.rect(50, currentY, tableWidth, 18).fillAndStroke('#F0F4F8', '#000000');
+        doc.fillColor('#102A43');
+        doc.text(acto.codigoActo === 'ANILLOS' ? 'SUBTOTAL ANILLOS' : `SUBTOTAL ACTO ${acto.codigoActo}`, 60, currentY + 5, { width: 230, lineBreak: false });
+        doc.text(acto.operacionesActo.toString(), 290, currentY + 5, { width: 80, align: 'center', lineBreak: false });
+        doc.text(acto.totalActo.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 5, { width: 155, align: 'right', lineBreak: false });
+
+        currentY += 25;
+        actosEnPaginaActual++;
+    });
+
+    // --- TOTAL GENERAL ---
+    if (currentY + 30 > MAX_Y) {
+        doc.addPage();
+        addHeader(doc);
+        currentY = 130;
+    }
+
+    doc.font('Helvetica-Bold').fontSize(9);
+    doc.rect(50, currentY, tableWidth, 22).fillAndStroke('#D1E7DD', '#000000');
+    doc.fillColor('#0F5132');
+    doc.text("TOTAL GENERAL (TODOS LOS ACTOS Y ANILLOS)", 60, currentY + 7, { width: 230, lineBreak: false });
+    doc.text(totalOperacionesCierre.toString(), 290, currentY + 7, { width: 80, align: 'center', lineBreak: false });
+    doc.text(totalGeneralCierre.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 7, { width: 155, align: 'right', lineBreak: false });
+
+    currentY += 35;
+
+    // --- DETALLE DE TRANSACCIONES ---
+    if (currentY + 50 > MAX_Y) {
+        doc.addPage();
+        addHeader(doc);
+        currentY = 130;
+    }
+
+    doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
+    doc.text("DETALLE GENERAL DE TRANSACCIONES", 50, currentY);
+    currentY += 12;
+
+    const drawDetailHeader = (y) => {
+        doc.rect(50, y, tableWidth, 16).fillAndStroke('#E0E0E0', '#000000');
+        doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+        doc.text("CONTRATO", 55, y + 4, { width: 55, lineBreak: false });
+        doc.text("TIPO", 112, y + 4, { width: 40, lineBreak: false });
+        doc.text("RECIBO", 155, y + 4, { width: 55, lineBreak: false });
+        doc.text("CÉDULA", 213, y + 4, { width: 55, lineBreak: false });
+        doc.text("MÉTODO", 271, y + 4, { width: 75, lineBreak: false });
+        doc.text("BANCO / REF", 350, y + 4, { width: 100, lineBreak: false });
+        doc.text("MONTO", 455, y + 4, { width: 80, align: 'right', lineBreak: false });
+        return y + 16;
+    };
+
+    currentY = drawDetailHeader(currentY);
+    doc.font('Helvetica').fontSize(8);
+
+    detalleDepositos.forEach((dep, index) => {
+        const bancoRef = [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ').toUpperCase();
+        const metodoStr = (dep.metodoPago || '').toUpperCase();
+
+        doc.font('Helvetica').fontSize(8);
+        const hBanco = doc.heightOfString(bancoRef, { width: 100 });
+        const hMetodo = doc.heightOfString(metodoStr, { width: 75 });
+        
+        const dynamicRowHeight = Math.max(16, hBanco + 6, hMetodo + 6);
+
+        if (currentY + dynamicRowHeight > MAX_Y) {
+            doc.addPage();
+            addHeader(doc);
+            currentY = 130;
+            currentY = drawDetailHeader(currentY);
+            doc.font('Helvetica').fontSize(8);
+        }
+
+        if ((index + 1) % 2 === 0) {
+            doc.fillColor('#FFFFE0').rect(50, currentY, tableWidth, dynamicRowHeight).fill();
+        }
+
+        doc.fillColor('#000000');
+        doc.rect(50, currentY, tableWidth, dynamicRowHeight).stroke();
+
+        doc.text(dep.NoContrato?.toString() || '', 55, currentY + 4, { width: 55, lineBreak: false });
+        doc.text(dep.CodigoActo ? 'ACTO' : 'ANILLO', 112, currentY + 4, { width: 40, lineBreak: false });
+        doc.text(dep.NoRecibo?.toString() || '', 155, currentY + 4, { width: 55, lineBreak: false });
+        doc.text(dep.NuCedula?.toString() || '', 213, currentY + 4, { width: 55, lineBreak: false });
+        doc.text(metodoStr, 271, currentY + 4, { width: 75 });
+        doc.text(bancoRef, 350, currentY + 4, { width: 100 });
+        doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 455, currentY + 4, { width: 80, align: 'right', lineBreak: false });
+
+        currentY += dynamicRowHeight;
+    });
+
+    // 6. PIE DE PÁGINA Y NÚMERO DE PÁGINA (Buffer Pasada 2)
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < (range.start + range.count); i++) {
+        doc.switchToPage(i);
+        
+        // Usamos coordenadas absolutas seguras dentro de la hoja A4 (altura: ~842pt)
+        const footerBaseY = 760;
+        
+        doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke('#000000');
+        doc.fontSize(7).font('Helvetica').fillColor('#000000');
+        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 5, { align: 'center', width: tableWidth, lineBreak: false });
+        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 14, { align: 'center', width: tableWidth, lineBreak: false });
+        
+        doc.fontSize(8).font('Helvetica-Bold')
+            .text(`Página ${i + 1} de ${range.count}`, 50, footerBaseY + 23, { align: 'right', width: tableWidth, lineBreak: false });
+    }
+
+    doc.end();
+};
+
+// Excel del cierre (X o Z), con el mismo encabezado y pie que los demás reportes en Excel.
+const enviarExcelCierre = async (res, { titulo, subtitulo, filename, usuarioReporte, totalesPorActoYMetodo, detalleDepositos }) => {
+    const { resumenPorActo, totalGeneralCierre, totalOperacionesCierre } = agruparCierre(totalesPorActoYMetodo);
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Cierre', { pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+    const totalCols = 7;
+    const lastColChar = 'G';
+    const bordeCompleto = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' }
+    };
+    const formatoMonto = '#,##0.00';
+
+    worksheet.columns = [
+        { width: 14 }, { width: 10 }, { width: 14 }, { width: 14 },
+        { width: 18 }, { width: 26 }, { width: 16 }
+    ];
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    try {
+        const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+        worksheet.addImage(logoId, {
+            tl: { col: 0.2, row: 1.2 },
+            ext: { width: 60, height: 40 },
+            editAs: 'onCell'
+        });
+    } catch (e) {}
+
+    worksheet.getRow(2).height = 50;
+
+    const empresaCell = worksheet.getCell('B2');
+    empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+    empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+    empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+    const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+    const metaCell = worksheet.getCell(`${lastColChar}2`);
+    metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte || 'SISTEMA'}`;
+    metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+    metaCell.font = { name: 'Arial', size: 8 };
+
+    for (let i = 1; i <= totalCols; i++) {
+        worksheet.getCell(`${String.fromCharCode(64 + i)}5`).border = { bottom: { style: 'thin' } };
+    }
+
+    worksheet.mergeCells(`A6:${lastColChar}6`);
+    const titleCell = worksheet.getCell('A6');
+    titleCell.value = titulo;
+    titleCell.font = { name: 'Arial', bold: true, size: 13 };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    worksheet.mergeCells(`A7:${lastColChar}7`);
+    const subCell = worksheet.getCell('A7');
+    subCell.value = subtitulo;
+    subCell.font = { name: 'Arial', bold: true, size: 9 };
+    subCell.alignment = { horizontal: 'center' };
+
+    const filaTabla = (valores, { bold = false, fill = null, resumen = false } = {}) => {
+        const row = worksheet.addRow(valores);
+        // En el resumen el método ocupa A:D y la cantidad E:F
+        if (resumen) {
+            worksheet.mergeCells(`A${row.number}:D${row.number}`);
+            worksheet.mergeCells(`E${row.number}:F${row.number}`);
+        }
+        row.eachCell({ includeEmpty: true }, (cell, col) => {
+            if (col > valores.length) return;
+            cell.border = bordeCompleto;
+            cell.font = { name: 'Arial', size: 9, bold };
+            cell.alignment = { vertical: 'middle', wrapText: true, horizontal: resumen && col === 5 ? 'center' : undefined };
+            if (fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+        });
+        return row;
+    };
+
+    // --- RESUMEN POR ACTO / ANILLOS ---
+    worksheet.addRow([]);
+    Object.values(resumenPorActo).forEach(acto => {
+        const tituloRow = worksheet.addRow([etiquetaGrupo(acto)]);
+        tituloRow.getCell(1).font = { name: 'Arial', bold: true, size: 10 };
+
+        filaTabla(['MÉTODO DE PAGO', '', '', '', 'CANT. OP.', '', 'SUBTOTAL'], { bold: true, fill: 'FFEAEAEA', resumen: true });
+        acto.metodos.forEach(m => {
+            const row = filaTabla([m.metodo.toUpperCase(), '', '', '', m.cantidad, '', m.monto], { resumen: true });
+            row.getCell(7).numFmt = formatoMonto;
+        });
+        const subRow = filaTabla([acto.codigoActo === 'ANILLOS' ? 'SUBTOTAL ANILLOS' : `SUBTOTAL ACTO ${acto.codigoActo}`, '', '', '', acto.operacionesActo, '', acto.totalActo], { bold: true, fill: 'FFF0F4F8', resumen: true });
+        subRow.getCell(7).numFmt = formatoMonto;
+        worksheet.addRow([]);
+    });
+
+    const totalRow = filaTabla(['TOTAL GENERAL (TODOS LOS ACTOS Y ANILLOS)', '', '', '', totalOperacionesCierre, '', totalGeneralCierre], { bold: true, fill: 'FFD1E7DD', resumen: true });
+    totalRow.getCell(7).numFmt = formatoMonto;
+
+    // --- DETALLE DE TRANSACCIONES ---
+    worksheet.addRow([]);
+    const detTitulo = worksheet.addRow(['DETALLE GENERAL DE TRANSACCIONES']);
+    detTitulo.getCell(1).font = { name: 'Arial', bold: true, size: 10 };
+
+    filaTabla(['CONTRATO', 'TIPO', 'RECIBO', 'CÉDULA', 'MÉTODO', 'BANCO / REF', 'MONTO'], { bold: true, fill: 'FFE0E0E0' });
+    detalleDepositos.forEach((dep, index) => {
+        const row = filaTabla([
+            dep.NoContrato ?? '',
+            dep.CodigoActo ? 'ACTO' : 'ANILLO',
+            dep.NoRecibo ?? '',
+            dep.NuCedula ?? '',
+            (dep.metodoPago || '').toUpperCase(),
+            [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ').toUpperCase(),
+            Number(dep.monto || 0)
+        ], { fill: (index + 1) % 2 === 0 ? 'FFFFFFE0' : null });
+        row.getCell(7).numFmt = formatoMonto;
+    });
+
+    // --- PIE ---
+    const lineSeparatorRow = worksheet.lastRow.number + 2;
+    for (let i = 1; i <= totalCols; i++) {
+        worksheet.getCell(`${String.fromCharCode(64 + i)}${lineSeparatorRow}`).border = { bottom: { style: 'thin' } };
+    }
+
+    const footerStart = lineSeparatorRow + 1;
+    worksheet.mergeCells(`A${footerStart}:${lastColChar}${footerStart}`);
+    worksheet.mergeCells(`A${footerStart + 1}:${lastColChar}${footerStart + 1}`);
+
+    const f1 = worksheet.getCell(`A${footerStart}`);
+    const f2 = worksheet.getCell(`A${footerStart + 1}`);
+    f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+    f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+    [f1, f2].forEach(c => {
+        c.alignment = { horizontal: 'center' };
+        c.font = { name: 'Arial', size: 9 };
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename.replace(/\.pdf$/, '.xlsx')}`);
+    await workbook.xlsx.write(res);
+    res.end();
+};
+
+// El cierre se genera igual; solo cambia el archivo que se devuelve.
+const enviarCierre = (res, formato, opciones) =>
+    String(formato).toUpperCase() === 'EXCEL' ? enviarExcelCierre(res, opciones) : enviarPdfCierre(res, opciones);
+
+// Fecha que le toca al próximo Cierre Z: el día pendiente o, si no hay, hoy.
+exports.closingZFecha = async (req, res) => {
+    try {
+        const hoy = hoyVenezuela();
+        res.json({ fecha: (await fechaPendienteZ(hoy)) || hoy });
+    } catch (error) {
+        console.error('Error al consultar la fecha del Cierre Z:', error);
+        res.status(500).json({ error: 'Error interno al consultar la fecha del Cierre Z.' });
+    }
+};
+
+// Cierre Z: uno solo por día para todos los cajeros. Marca los recibos y
+// depósitos de la fecha con el correlativo NoCierreZ de configuracion.
+exports.generateClosingPdf = async (req, res) => {
+    const { ferecibo, CodUser, usuarioReporte, formato, NoCierre } = req.body;
+
+    const fechaFiltroBD = String(ferecibo || '').split('T')[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaFiltroBD)) {
         return res.status(400).json({
             error: "Parámetros incompletos",
-            message: "Los campos ferecibo y NoCierre son obligatorios."
+            message: "El campo ferecibo es obligatorio (YYYY-MM-DD)."
         });
     }
 
-    // 1. NORMALIZACIÓN DE FECHAS
-    const fechaFiltroBD = ferecibo.split('T')[0]; 
-    const [year, month, day] = fechaFiltroBD.split('-');
-    const fechaReciboFormateada = `${day}/${month}/${year}`;
+    const fechaCierreBD = hoyVenezuela();
+    if (fechaFiltroBD > fechaCierreBD) {
+        return res.status(400).json({
+            error: "Fecha inválida",
+            message: "No se puede generar el Cierre Z de una fecha futura."
+        });
+    }
 
-    const fechaHoy = new Date();
-    const fechaCierreBD = fechaHoy.toISOString().split('T')[0];
+    const fechaReciboFormateada = aDMY(fechaFiltroBD);
 
     let connection;
 
@@ -1444,19 +1898,50 @@ exports.generateClosingPdf = async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 2. ACTUALIZACIÓN EN BASE DE DATOS
+        // FOR UPDATE: dos cierres simultáneos no toman el mismo número
+        const antesConfig = await audit.antesDe('SELECT * FROM configuracion LIMIT 1 FOR UPDATE', [], connection);
+        const NoCierreZ = Number(antesConfig?.NoCierreZ) || 1;
+
+        const [yaCerrado] = await connection.query(
+            `SELECT NoCierreZ, DATE_FORMAT(FechaCierreZ, '%Y-%m-%d') AS procesado
+             FROM recibopago WHERE FeRecibo = ? AND NoCierreZ > 0 LIMIT 1`,
+            [fechaFiltroBD]
+        );
+
+        if (yaCerrado.length > 0) {
+            await connection.rollback();
+
+            // Es el mismo Z que muestra el modal (p. ej. el Excel después del PDF): se vuelve a emitir sin crear otro
+            const existente = Number(yaCerrado[0].NoCierreZ);
+            if (Number(NoCierre) === existente) {
+                const datos = await consultarCierre(connection, 'd.Fecha = ? AND d.NoCierreZ = ?', [fechaFiltroBD, existente]);
+                return await enviarCierre(res, formato, {
+                    titulo: `REPORTE DE CIERRE Z N° ${existente}`,
+                    subtitulo: `FECHA RECIBOS: ${fechaReciboFormateada}    |    FECHA PROCESADO: ${aDMY(yaCerrado[0].procesado || fechaCierreBD)}`,
+                    filename: `cierre-z-${existente}.pdf`,
+                    usuarioReporte,
+                    ...datos
+                });
+            }
+
+            return res.status(409).json({
+                error: "Cierre Z existente",
+                message: `Ya existe el Cierre Z N° ${yaCerrado[0].NoCierreZ} del ${fechaReciboFormateada}. Solo se permite un Cierre Z por día.`
+            });
+        }
+
         const [resRecibos] = await connection.query(
             `UPDATE recibopago 
-             SET NoCierre = ?, FechaCierre = ? 
-             WHERE DATE(ferecibo) = ?`,
-            [NoCierre, fechaCierreBD, fechaFiltroBD]
+             SET NoCierreZ = ?, FechaCierreZ = ? 
+             WHERE FeRecibo = ? AND (NoCierreZ IS NULL OR NoCierreZ = 0)`,
+            [NoCierreZ, fechaCierreBD, fechaFiltroBD]
         );
 
         const [resDepositos] = await connection.query(
             `UPDATE depositos 
-             SET NoCierre = ?, FechaCierre = ? 
-             WHERE DATE(Fecha) = ?`,
-            [NoCierre, fechaCierreBD, fechaFiltroBD]
+             SET NoCierreZ = ?, FechaCierreZ = ? 
+             WHERE Fecha = ? AND (NoCierreZ IS NULL OR NoCierreZ = 0)`,
+            [NoCierreZ, fechaCierreBD, fechaFiltroBD]
         );
 
         if (resRecibos.affectedRows === 0 && resDepositos.affectedRows === 0) {
@@ -1467,300 +1952,205 @@ exports.generateClosingPdf = async (req, res) => {
             });
         }
 
-        await connection.query("UPDATE Configuracion SET NoCierre = NoCierre + 1");
+        await connection.query('UPDATE configuracion SET NoCierreZ = ?', [NoCierreZ + 1]);
 
         // Auditoría del cierre (misma transacción)
-        const antesConfig = await audit.antesDe('SELECT * FROM configuracion LIMIT 1', [], connection);
         audit.auditarMovimiento({
             tabla: 'recibopago',
-            mensaje: `Cierre diario N° ${NoCierre} (${fechaReciboFormateada}): ${resRecibos.affectedRows} recibo(s) auditado(s) (NoCierre -> ${NoCierre}, FechaCierre -> ${fechaCierreBD})`,
+            mensaje: `Cierre Z N° ${NoCierreZ} (${fechaReciboFormateada}): ${resRecibos.affectedRows} recibo(s) auditado(s) (NoCierreZ -> ${NoCierreZ}, FechaCierreZ -> ${fechaCierreBD})`,
             conn: connection
         });
         audit.auditarMovimiento({
             tabla: 'depositos',
-            mensaje: `Cierre diario N° ${NoCierre} (${fechaReciboFormateada}): ${resDepositos.affectedRows} depósito(s) auditado(s) (NoCierre -> ${NoCierre}, FechaCierre -> ${fechaCierreBD})`,
+            mensaje: `Cierre Z N° ${NoCierreZ} (${fechaReciboFormateada}): ${resDepositos.affectedRows} depósito(s) auditado(s) (NoCierreZ -> ${NoCierreZ}, FechaCierreZ -> ${fechaCierreBD})`,
             conn: connection
         });
         audit.auditarUpdate({
             tabla: 'configuracion',
             antes: antesConfig,
-            despues: { NoCierre: (antesConfig && antesConfig.NoCierre !== null && antesConfig.NoCierre !== undefined) ? Number(antesConfig.NoCierre) + 1 : null },
+            despues: { NoCierreZ: NoCierreZ + 1 },
             conn: connection
         });
 
+        // Se filtra también por fecha: el Z reinició en 1 y los cierres
+        // viejos (antes NoCierre) ya usan esos números.
+        const datos = await consultarCierre(connection, 'd.Fecha = ? AND d.NoCierreZ = ?', [fechaFiltroBD, NoCierreZ]);
+
+        await connection.query(
+            `INSERT INTO cortes_caja (CodUser, fecha_hora, total_ventas, NoCierreZ)
+             VALUES (?, ?, ?, ?)`,
+            [CodUser || null, ahoraVenezuela(), totalCierre(datos), NoCierreZ]
+        );
+
+        // Liga con este Z los Cierres X de esa fecha (por los recibos/abonos que marcaron).
+        // shortcut: un X repetido sin ventas nuevas no marca nada y queda sin NoCierreZ; agregar una columna de fecha en cortes_caja si hace falta ligarlo.
+        await connection.query(
+            `UPDATE cortes_caja SET NoCierreZ = ?
+             WHERE NoCierreZ IS NULL AND NoCierreX IN (
+                 SELECT NoCierreX FROM depositos WHERE Fecha = ? AND NoCierreX IS NOT NULL
+                 UNION
+                 SELECT NoCierreX FROM recibopago WHERE FeRecibo = ? AND NoCierreX IS NOT NULL
+             )`,
+            [NoCierreZ, fechaFiltroBD, fechaFiltroBD]
+        );
+
         await connection.commit();
 
-        // 3. CONSULTAS PARA EL REPORTE
-        const [totalesPorActoYMetodo] = await connection.query(
-            `SELECT 
-                r.CodigoActo,
-                COALESCE(ag.Titulo, 'ACTO NO ESPECIFICADO') AS TituloActo,
-                COALESCE(NULLIF(d.TipoOperacion, ''), 'NO ESPECIFICADO') AS metodoPago,
-                COUNT(d.id) AS cantidadOperaciones,
-                SUM(CAST(d.MnDeposito AS DECIMAL(12,2))) AS totalMetodo
-             FROM depositos d
-             INNER JOIN recibopago r ON d.NoRecibo = r.NoRecibo
-             LEFT JOIN actosgrados ag ON r.CodigoActo = ag.CodigoActo
-             WHERE d.NoCierre = ?
-             GROUP BY r.CodigoActo, ag.Titulo, COALESCE(NULLIF(d.TipoOperacion, ''), 'NO ESPECIFICADO')
-             ORDER BY r.CodigoActo ASC, totalMetodo DESC`,
-            [NoCierre]
-        );
-
-        const [detalleDepositos] = await connection.query(
-            `SELECT 
-                d.NoRecibo, 
-                d.NuCedula, 
-                r.CodigoActo,
-                d.TipoOperacion AS metodoPago, 
-                d.TxBanco, 
-                d.NuDeposito AS referencia, 
-                d.MnDeposito AS monto
-             FROM depositos d
-             INNER JOIN recibopago r ON d.NoRecibo = r.NoRecibo
-             WHERE d.NoCierre = ?
-             ORDER BY r.CodigoActo ASC, d.NoRecibo ASC`,
-            [NoCierre]
-        );
-
-        // 4. AGRUPACIÓN DE DATOS
-        const resumenPorActo = {};
-        let totalGeneralCierre = 0;
-        let totalOperacionesCierre = 0;
-
-        totalesPorActoYMetodo.forEach(item => {
-            const cod = item.CodigoActo || 'SIN_CODIGO';
-            if (!resumenPorActo[cod]) {
-                resumenPorActo[cod] = {
-                    codigoActo: cod,
-                    tituloActo: item.TituloActo,
-                    metodos: [],
-                    totalActo: 0,
-                    operacionesActo: 0
-                };
-            }
-            const monto = Number(item.totalMetodo || 0);
-            const cant = Number(item.cantidadOperaciones || 0);
-
-            resumenPorActo[cod].metodos.push({
-                metodo: item.metodoPago,
-                cantidad: cant,
-                monto: monto
-            });
-
-            resumenPorActo[cod].totalActo += monto;
-            resumenPorActo[cod].operacionesActo += cant;
-
-            totalGeneralCierre += monto;
-            totalOperacionesCierre += cant;
+        await enviarCierre(res, formato, {
+            titulo: `REPORTE DE CIERRE Z N° ${NoCierreZ}`,
+            subtitulo: `FECHA RECIBOS: ${fechaReciboFormateada}    |    FECHA PROCESADO: ${aDMY(fechaCierreBD)}`,
+            filename: `cierre-z-${NoCierreZ}.pdf`,
+            usuarioReporte,
+            ...datos
         });
-
-        // 5. CONSTRUCCIÓN DEL PDF
-        // Ajustamos autoFirstPage y autoPageBreak para evitar que PDFKit cree páginas no deseadas
-        const doc = new PDFDocument({
-            size: 'A4',
-            margins: { top: 40, bottom: 40, left: 50, right: 50 },
-            bufferPages: true,
-            autoFirstPage: true
-        });
-
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename=cierre-${NoCierre}.pdf`);
-        doc.pipe(res);
-
-        const logoPath = path.join(__dirname, 'logo.png');
-        const tableWidth = 495;
-        const MAX_Y = 710; // Umbral de seguridad para salto manual de página
-
-        const addHeader = (doc) => {
-            try {
-                doc.image(logoPath, 50, 35, { width: 65 });
-            } catch (error) {
-                // Silencioso si la imagen no existe
-            }
-
-            doc.fontSize(9).font('Helvetica-Bold')
-                .text("Grado`s de Venezuela, C.A.", 130, 40)
-                .font('Helvetica').text("J-30591547-4", 130, 52);
-
-            const { fechaImpresion, horaActual } = getFechaHoraVenezuela();
-
-            doc.fontSize(8).font('Helvetica')
-                .text(`Fecha Impresión: ${fechaImpresion}`, 350, 40, { align: 'right' })
-                .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
-                .text(`Usuario: ${usuarioReporte || 'SISTEMA'}`, 350, 60, { align: 'right' });
-
-            doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
-            
-            const fullTitle = `REPORTE DE CIERRE DIARIO N° ${NoCierre}`;
-            doc.fontSize(11).font('Helvetica-Bold').text(fullTitle, 50, 95, { align: 'center', width: tableWidth });
-            
-            doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
-        };
-
-        addHeader(doc);
-
-        let currentY = 125;
-
-        // Subtítulo
-        doc.fontSize(8).font('Helvetica-Bold').fillColor('#333333');
-        doc.text(`FECHA RECIBOS: ${fechaReciboFormateada}    |    FECHA PROCESADO: ${fechaHoy.toLocaleDateString('es-VE')}`, 50, currentY);
-        currentY += 20;
-
-        // --- RESUMEN POR ACTO ---
-        let actosEnPaginaActual = 0;
-        const maxActosPorPagina = 5;
-
-        Object.values(resumenPorActo).forEach(acto => {
-            const alturaAproxActo = 12 + 16 + (acto.metodos.length * 16) + 18 + 15;
-
-            if (currentY + alturaAproxActo > MAX_Y || actosEnPaginaActual >= maxActosPorPagina) {
-                doc.addPage();
-                addHeader(doc);
-                currentY = 130;
-                actosEnPaginaActual = 0;
-            }
-
-            doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
-            doc.text(`ACTO ${acto.codigoActo}: ${acto.tituloActo.toUpperCase()}`, 50, currentY);
-            currentY += 12;
-
-            doc.rect(50, currentY, tableWidth, 16).fillAndStroke('#EAEAEA', '#000000');
-            doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
-            doc.text("MÉTODO DE PAGO", 60, currentY + 4, { width: 230, lineBreak: false });
-            doc.text("CANT. OP.", 290, currentY + 4, { width: 80, align: 'center', lineBreak: false });
-            doc.text("SUBTOTAL", 380, currentY + 4, { width: 155, align: 'right', lineBreak: false });
-            currentY += 16;
-
-            acto.metodos.forEach((m, idx) => {
-                const rowH = 16;
-                if ((idx + 1) % 2 === 0) {
-                    doc.fillColor('#FAFAFA').rect(50, currentY, tableWidth, rowH).fill();
-                }
-
-                doc.fillColor('#000000').font('Helvetica').fontSize(8);
-                doc.rect(50, currentY, tableWidth, rowH).stroke();
-
-                doc.text(m.metodo.toUpperCase(), 60, currentY + 4, { width: 230, lineBreak: false });
-                doc.text(m.cantidad.toString(), 290, currentY + 4, { width: 80, align: 'center', lineBreak: false });
-                doc.text(m.monto.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 4, { width: 155, align: 'right', lineBreak: false });
-
-                currentY += rowH;
-            });
-
-            // Subtotal
-            doc.font('Helvetica-Bold').fontSize(8);
-            doc.rect(50, currentY, tableWidth, 18).fillAndStroke('#F0F4F8', '#000000');
-            doc.fillColor('#102A43');
-            doc.text(`SUBTOTAL ACTO ${acto.codigoActo}`, 60, currentY + 5, { width: 230, lineBreak: false });
-            doc.text(acto.operacionesActo.toString(), 290, currentY + 5, { width: 80, align: 'center', lineBreak: false });
-            doc.text(acto.totalActo.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 5, { width: 155, align: 'right', lineBreak: false });
-
-            currentY += 25;
-            actosEnPaginaActual++;
-        });
-
-        // --- TOTAL GENERAL ---
-        if (currentY + 30 > MAX_Y) {
-            doc.addPage();
-            addHeader(doc);
-            currentY = 130;
-        }
-
-        doc.font('Helvetica-Bold').fontSize(9);
-        doc.rect(50, currentY, tableWidth, 22).fillAndStroke('#D1E7DD', '#000000');
-        doc.fillColor('#0F5132');
-        doc.text("TOTAL GENERAL DEL CIERRE (TODOS LOS ACTOS)", 60, currentY + 7, { width: 230, lineBreak: false });
-        doc.text(totalOperacionesCierre.toString(), 290, currentY + 7, { width: 80, align: 'center', lineBreak: false });
-        doc.text(totalGeneralCierre.toLocaleString('es-VE', { minimumFractionDigits: 2 }), 380, currentY + 7, { width: 155, align: 'right', lineBreak: false });
-
-        currentY += 35;
-
-        // --- DETALLE DE TRANSACCIONES ---
-        if (currentY + 50 > MAX_Y) {
-            doc.addPage();
-            addHeader(doc);
-            currentY = 130;
-        }
-
-        doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
-        doc.text("DETALLE GENERAL DE TRANSACCIONES", 50, currentY);
-        currentY += 12;
-
-        const drawDetailHeader = (y) => {
-            doc.rect(50, y, tableWidth, 16).fillAndStroke('#E0E0E0', '#000000');
-            doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
-            doc.text("ACTO", 55, y + 4, { width: 45, lineBreak: false });
-            doc.text("RECIBO", 105, y + 4, { width: 50, lineBreak: false });
-            doc.text("CÉDULA", 160, y + 4, { width: 65, lineBreak: false });
-            doc.text("MÉTODO", 230, y + 4, { width: 80, lineBreak: false });
-            doc.text("BANCO / REF", 315, y + 4, { width: 120, lineBreak: false });
-            doc.text("MONTO", 440, y + 4, { width: 95, align: 'right', lineBreak: false });
-            return y + 16;
-        };
-
-        currentY = drawDetailHeader(currentY);
-        doc.font('Helvetica').fontSize(8);
-
-        detalleDepositos.forEach((dep, index) => {
-            const bancoRef = [dep.TxBanco, dep.referencia].filter(Boolean).join(' - ').toUpperCase();
-            const metodoStr = (dep.metodoPago || '').toUpperCase();
-
-            doc.font('Helvetica').fontSize(8);
-            const hBanco = doc.heightOfString(bancoRef, { width: 120 });
-            const hMetodo = doc.heightOfString(metodoStr, { width: 80 });
-            
-            const dynamicRowHeight = Math.max(16, hBanco + 6, hMetodo + 6);
-
-            if (currentY + dynamicRowHeight > MAX_Y) {
-                doc.addPage();
-                addHeader(doc);
-                currentY = 130;
-                currentY = drawDetailHeader(currentY);
-                doc.font('Helvetica').fontSize(8);
-            }
-
-            if ((index + 1) % 2 === 0) {
-                doc.fillColor('#FFFFE0').rect(50, currentY, tableWidth, dynamicRowHeight).fill();
-            }
-
-            doc.fillColor('#000000');
-            doc.rect(50, currentY, tableWidth, dynamicRowHeight).stroke();
-
-            doc.text(dep.CodigoActo?.toString() || '', 55, currentY + 4, { width: 45, lineBreak: false });
-            doc.text(dep.NoRecibo?.toString() || '', 105, currentY + 4, { width: 50, lineBreak: false });
-            doc.text(dep.NuCedula?.toString() || '', 160, currentY + 4, { width: 65, lineBreak: false });
-            doc.text(metodoStr, 230, currentY + 4, { width: 80 });
-            doc.text(bancoRef, 315, currentY + 4, { width: 120 });
-            doc.text(Number(dep.monto || 0).toLocaleString('es-VE', { minimumFractionDigits: 2 }), 440, currentY + 4, { width: 95, align: 'right', lineBreak: false });
-
-            currentY += dynamicRowHeight;
-        });
-
-        // 6. PIE DE PÁGINA Y NÚMERO DE PÁGINA (Buffer Pasada 2)
-        const range = doc.bufferedPageRange();
-        for (let i = range.start; i < (range.start + range.count); i++) {
-            doc.switchToPage(i);
-            
-            // Usamos coordenadas absolutas seguras dentro de la hoja A4 (altura: ~842pt)
-            const footerBaseY = 760;
-            
-            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke('#000000');
-            doc.fontSize(7).font('Helvetica').fillColor('#000000');
-            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 5, { align: 'center', width: tableWidth, lineBreak: false });
-            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 14, { align: 'center', width: tableWidth, lineBreak: false });
-            
-            doc.fontSize(8).font('Helvetica-Bold')
-                .text(`Página ${i + 1} de ${range.count}`, 50, footerBaseY + 23, { align: 'right', width: tableWidth, lineBreak: false });
-        }
-
-        doc.end();
 
     } catch (err) {
         if (connection) {
             await connection.rollback();
         }
-        console.error("Error al procesar el cierre:", err);
+        console.error("Error al procesar el cierre Z:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Error interno al procesar el cierre y generar el PDF." });
+        }
+    } finally {
+        if (connection) {
+            connection.release();
+        }
+    }
+};
+
+// Cierre X: parcial de un cajero. Es acumulado: suma todo lo que el cajero
+// facturó hoy hasta este momento, por eso puede haber muchos por día.
+// NoCierreX marca los recibos/depósitos la primera vez que entran en un X.
+exports.generateClosingXPdf = async (req, res) => {
+    const { CodUser, usuarioReporte, formato, NoCierre } = req.body;
+
+    if (CodUser === undefined || CodUser === null || CodUser === '') {
+        return res.status(400).json({
+            error: "Parámetros incompletos",
+            message: "El campo CodUser es obligatorio."
+        });
+    }
+
+    const hoy = hoyVenezuela();
+    // El X siempre es del día en curso
+    const fecha = hoy;
+    const ahora = ahoraVenezuela();
+
+    let connection;
+
+    try {
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const antesConfig = await audit.antesDe('SELECT * FROM configuracion LIMIT 1 FOR UPDATE', [], connection);
+        const NoCierreX = Number(antesConfig?.NoCierreX) || 1;
+
+        // Si el modal manda un X que ya generó este usuario (p. ej. el Excel después del PDF),
+        // se vuelve a emitir ese mismo X: solo lo que ya estaba facturado cuando se hizo.
+        const solicitado = Number(NoCierre) || 0;
+        if (solicitado && solicitado < NoCierreX) {
+            const [[corte]] = await connection.query(
+                `SELECT CodUser, DATE_FORMAT(fecha_hora, '%Y-%m-%d') AS fecha, DATE_FORMAT(fecha_hora, '%h:%i %p') AS hora
+                 FROM cortes_caja WHERE NoCierreX = ? LIMIT 1`,
+                [solicitado]
+            );
+
+            if (corte && String(corte.CodUser) === String(CodUser)) {
+                await connection.rollback();
+                const datos = await consultarCierre(
+                    connection,
+                    'd.Fecha = ? AND d.CodUser = ? AND d.NoCierreX <= ?',
+                    [corte.fecha, CodUser, solicitado]
+                );
+                return await enviarCierre(res, formato, {
+                    titulo: `REPORTE DE CIERRE X N° ${solicitado}`,
+                    subtitulo: `OPERACIONES DEL ${aDMY(corte.fecha)} HASTA LAS ${corte.hora}`,
+                    filename: `cierre-x-${solicitado}.pdf`,
+                    usuarioReporte,
+                    ...datos
+                });
+            }
+        }
+
+        const [[{ operaciones }]] = await connection.query(
+            'SELECT COUNT(*) AS operaciones FROM depositos WHERE Fecha = ? AND CodUser = ?',
+            [fecha, CodUser]
+        );
+
+        if (Number(operaciones) === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                error: "Sin operaciones",
+                message: `El cajero no tiene operaciones registradas el ${aDMY(fecha)}.`
+            });
+        }
+
+        const [resRecibos] = await connection.query(
+            `UPDATE recibopago 
+             SET NoCierreX = ?, FechaCierreX = ? 
+             WHERE FeRecibo = ? AND CodUser = ? AND (NoCierreX IS NULL OR NoCierreX = 0)`,
+            [NoCierreX, ahora, fecha, CodUser]
+        );
+
+        const [resDepositos] = await connection.query(
+            `UPDATE depositos 
+             SET NoCierreX = ?, FechaCierreX = ? 
+             WHERE Fecha = ? AND CodUser = ? AND (NoCierreX IS NULL OR NoCierreX = 0)`,
+            [NoCierreX, ahora, fecha, CodUser]
+        );
+
+        await connection.query('UPDATE configuracion SET NoCierreX = ?', [NoCierreX + 1]);
+
+        audit.auditarMovimiento({
+            tabla: 'recibopago',
+            mensaje: `Cierre X N° ${NoCierreX} (cajero ${CodUser}, ${aDMY(fecha)}): ${resRecibos.affectedRows} recibo(s) nuevo(s) (NoCierreX -> ${NoCierreX}, FechaCierreX -> ${ahora})`,
+            conn: connection
+        });
+        audit.auditarMovimiento({
+            tabla: 'depositos',
+            mensaje: `Cierre X N° ${NoCierreX} (cajero ${CodUser}, ${aDMY(fecha)}): ${resDepositos.affectedRows} depósito(s) nuevo(s) (NoCierreX -> ${NoCierreX}, FechaCierreX -> ${ahora})`,
+            conn: connection
+        });
+        audit.auditarUpdate({
+            tabla: 'configuracion',
+            antes: antesConfig,
+            despues: { NoCierreX: NoCierreX + 1 },
+            conn: connection
+        });
+
+        // Acumulado del día del cajero, no solo lo marcado en este X
+        const datos = await consultarCierre(connection, 'd.Fecha = ? AND d.CodUser = ?', [fecha, CodUser]);
+
+        // Si esa fecha ya tiene Cierre Z, el X nace ligado a él
+        const [zFecha] = await connection.query(
+            'SELECT NoCierreZ FROM recibopago WHERE FeRecibo = ? AND NoCierreZ > 0 LIMIT 1',
+            [fecha]
+        );
+
+        await connection.query(
+            `INSERT INTO cortes_caja (CodUser, fecha_hora, total_ventas, NoCierreX, NoCierreZ)
+             VALUES (?, ?, ?, ?, ?)`,
+            [CodUser, ahora, totalCierre(datos), NoCierreX, zFecha[0]?.NoCierreZ ?? null]
+        );
+
+        await connection.commit();
+
+        const { horaActual } = getFechaHoraVenezuela();
+
+        await enviarCierre(res, formato, {
+            titulo: `REPORTE DE CIERRE X N° ${NoCierreX}`,
+            subtitulo: `OPERACIONES DEL ${aDMY(fecha)} HASTA LAS ${horaActual}`,
+            filename: `cierre-x-${NoCierreX}.pdf`,
+            usuarioReporte,
+            ...datos
+        });
+
+    } catch (err) {
+        if (connection) {
+            await connection.rollback();
+        }
+        console.error("Error al procesar el cierre X:", err);
         if (!res.headersSent) {
             res.status(500).json({ error: "Error interno al procesar el cierre y generar el PDF." });
         }
@@ -2450,6 +2840,815 @@ exports.ringExpiringExcel = async (req, res) => {
         res.end();
     } catch (err) {
         console.error(err);
+        if (!res.headersSent) {
+            res.status(500).json({ status: 'error', message: 'Error interno al generar el reporte.' });
+        }
+    }
+};
+
+// ================= RECIBOS (consulta para reimprimir) =================
+// Un recibo es de anillo cuando no tiene CodigoActo.
+const SQL_RECIBOS = `
+    SELECT r.NoRecibo, DATE_FORMAT(r.FeRecibo, '%Y-%m-%d') AS FeRecibo, r.NuCedula,
+           (SELECT c.txnombre FROM clientes c WHERE c.nucedula = r.NuCedula LIMIT 1) AS Nombre,
+           (SELECT c.txemail FROM clientes c WHERE c.nucedula = r.NuCedula LIMIT 1) AS email,
+           r.NoContrato, IF(r.CodigoActo IS NULL, 'ANILLO', 'ACTO') AS tipo,
+           r.MnRecibo, r.Anulado
+    FROM recibopago r`;
+
+const esFechaISO = (f) => /^\d{4}-\d{2}-\d{2}$/.test(f || '');
+
+exports.recibosPorRango = async (req, res) => {
+    const { desde, hasta } = req.query;
+
+    if (!esFechaISO(desde) || !esFechaISO(hasta)) {
+        return res.status(400).json({ status: 'error', message: 'Debe indicar las fechas Desde y Hasta.' });
+    }
+    if (desde > hasta) {
+        return res.status(400).json({ status: 'error', message: 'La fecha Desde no puede ser mayor que la fecha Hasta.' });
+    }
+
+    try {
+        const [rows] = await db.query(
+            `${SQL_RECIBOS} WHERE r.FeRecibo BETWEEN ? AND ? ORDER BY r.FeRecibo ASC, r.NoRecibo ASC`,
+            [desde, hasta]
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error('Error al consultar recibos por rango:', error);
+        res.status(500).json({ status: 'error', message: 'Error al consultar los recibos.' });
+    }
+};
+
+exports.reciboPorNumero = async (req, res) => {
+    const NoRecibo = Number(req.params.NoRecibo);
+
+    if (!NoRecibo) {
+        return res.status(400).json({ status: 'error', message: 'Número de recibo inválido.' });
+    }
+
+    try {
+        const [rows] = await db.query(`${SQL_RECIBOS} WHERE r.NoRecibo = ? LIMIT 1`, [NoRecibo]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ status: 'error', message: `No se encontró el recibo N° ${NoRecibo}.` });
+        }
+        res.json(rows[0]);
+    } catch (error) {
+        console.error('Error al consultar el recibo:', error);
+        res.status(500).json({ status: 'error', message: 'Error al consultar el recibo.' });
+    }
+};
+
+// ================= GRADUANDOS POR ACTO =================
+// Todos los actos, incluso los que aún no tienen graduandos.
+const SQL_GRADUANDOS_ACTO = `
+    SELECT a.CodigoActo, a.Fecha, a.siglas, a.titulo, a.especialidad, COUNT(d.id) AS graduandos
+    FROM actosgrados a
+    LEFT JOIN deactosgrados d ON d.CodigoActo = a.CodigoActo
+    GROUP BY a.id, a.CodigoActo, a.Fecha, a.siglas, a.titulo, a.especialidad
+    ORDER BY a.CodigoActo ASC`;
+
+const fechaActoDMY = (f) => (esFechaISO(f) ? aDMY(f) : (f || ''));
+
+exports.graduatesByActPdf = async (req, res) => {
+    const { usuarioReporte } = req.params;
+
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 20, left: 50, right: 50 },
+        bufferPages: true
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename=reporte-graduandos-acto.pdf');
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    // Total 495
+    const colWidths = { cod: 55, fec: 60, ins: 80, tit: 115, esp: 125, gra: 60 };
+    const rowHeight = 20;
+
+    const addHeader = () => {
+        try {
+            doc.image(logoPath, 50, 35, { width: 65 });
+        } catch (error) {
+            console.log("Error logo");
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
+
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuarioReporte}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        doc.fontSize(12).font('Helvetica-Bold').text("Reporte de Graduandos por Acto", 50, 95, { align: 'center' });
+        doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+    };
+
+    const drawTableHeader = (y) => {
+        doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold');
+        let headX = 50;
+        ["CÓDIGO", "FECHA", "INSTITUCIÓN", "TÍTULO", "ESPECIALIDAD", "GRADUANDOS"].forEach((h, i) => {
+            const w = Object.values(colWidths)[i];
+            doc.rect(headX, y, w, rowHeight).stroke();
+            doc.text(h, headX, y + 6, { width: w, align: 'center' });
+            headX += w;
+        });
+        return y + rowHeight;
+    };
+
+    addHeader();
+
+    try {
+        const [rows] = await db.query(SQL_GRADUANDOS_ACTO);
+
+        let currentY = drawTableHeader(130);
+        doc.font('Helvetica').fontSize(7.5);
+        const keys = Object.keys(colWidths);
+
+        rows.forEach((item, index) => {
+            if (index > 0 && index % 28 === 0) {
+                doc.addPage();
+                addHeader();
+                currentY = drawTableHeader(130);
+                doc.font('Helvetica').fontSize(7.5);
+            }
+
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, currentY, 495, rowHeight).fill();
+            }
+
+            doc.fillColor('#000000');
+            let rX = 50;
+            const dataArr = [item.CodigoActo, fechaActoDMY(item.Fecha), item.siglas, item.titulo, item.especialidad, item.graduandos];
+
+            dataArr.forEach((val, i) => {
+                const w = colWidths[keys[i]];
+                const isTextCol = (i >= 2 && i <= 4);
+                doc.rect(rX, currentY, w, rowHeight).stroke();
+                doc.text(val?.toString() || '', rX + (isTextCol ? 4 : 0), currentY + 6, {
+                    width: isTextCol ? w - 8 : w,
+                    align: isTextCol ? 'left' : 'center',
+                    lineBreak: false,
+                    ellipsis: true
+                });
+                rX += w;
+            });
+            currentY += rowHeight;
+        });
+
+        // Total al final de la tabla
+        const total = rows.reduce((acc, r) => acc + Number(r.graduandos), 0);
+        if (currentY + rowHeight > 740) {
+            doc.addPage();
+            addHeader();
+            currentY = 130;
+        }
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.rect(50, currentY, 435, rowHeight).stroke();
+        doc.text(`TOTAL: ${rows.length} ACTOS`, 54, currentY + 6, { width: 427, align: 'right' });
+        doc.rect(485, currentY, 60, rowHeight).stroke();
+        doc.text(String(total), 485, currentY + 6, { width: 60, align: 'center' });
+
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < (range.start + range.count); i++) {
+            doc.switchToPage(i);
+            const footerBaseY = 750;
+            doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+            doc.fontSize(9).font('Helvetica').fillColor('#000000');
+            doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
+            doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { align: 'center', width: 495 });
+
+            doc.fontSize(8).font('Helvetica-Bold')
+                .text(`Página ${i + 1} / ${range.count}`, 50, 785, { align: 'right', width: 495 });
+        }
+    } catch (err) {
+        console.error(err);
+    }
+    doc.end();
+};
+
+exports.graduatesByActExcel = async (req, res) => {
+    try {
+        const { usuarioReporte } = req.params;
+        const [rows] = await db.query(SQL_GRADUANDOS_ACTO);
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Graduandos por Acto');
+
+        const logoPath = path.join(__dirname, 'logo.png');
+        const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+        worksheet.addImage(logoId, {
+            tl: { col: 0.1, row: 1.2 },
+            ext: { width: 60, height: 40 }
+        });
+        worksheet.getRow(2).height = 50;
+
+        const empresaCell = worksheet.getCell('B2');
+        empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+        empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+        const metaCell = worksheet.getCell('F2');
+        metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+        metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+        metaCell.font = { name: 'Arial', size: 8 };
+
+        const cols = ['A', 'B', 'C', 'D', 'E', 'F'];
+        cols.forEach(col => worksheet.getCell(`${col}5`).border = { bottom: { style: 'thin' } });
+        worksheet.mergeCells('A6:F6');
+        const tCell = worksheet.getCell('A6');
+        tCell.value = "Reporte de Graduandos por Acto";
+        tCell.font = { bold: true, size: 13 };
+        tCell.alignment = { horizontal: 'center' };
+        cols.forEach(col => worksheet.getCell(`${col}6`).border = { bottom: { style: 'thin' } });
+
+        worksheet.columns = [
+            { key: 'cod', width: 14 },
+            { key: 'fec', width: 13 },
+            { key: 'ins', width: 20 },
+            { key: 'tit', width: 35 },
+            { key: 'esp', width: 35 },
+            { key: 'gra', width: 15 }
+        ];
+
+        const borde = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+
+        const hRow = worksheet.getRow(8);
+        hRow.values = ["CÓDIGO", "FECHA", "INSTITUCIÓN", "TÍTULO", "ESPECIALIDAD", "GRADUANDOS"];
+        hRow.eachCell(c => {
+            c.font = { bold: true };
+            c.alignment = { horizontal: 'center' };
+            c.border = borde;
+        });
+
+        rows.forEach((item, index) => {
+            const row = worksheet.addRow([
+                item.CodigoActo, fechaActoDMY(item.Fecha), item.siglas, item.titulo, item.especialidad, Number(item.graduandos)
+            ]);
+            const esPar = (index + 1) % 2 === 0;
+            row.eachCell((cell, colNum) => {
+                cell.border = borde;
+                cell.alignment = { horizontal: [1, 2, 6].includes(colNum) ? 'center' : 'left', vertical: 'middle' };
+                if (esPar) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0' } };
+            });
+        });
+
+        const total = rows.reduce((acc, r) => acc + Number(r.graduandos), 0);
+        const totalRow = worksheet.addRow([`TOTAL: ${rows.length} ACTOS`, '', '', '', '', total]);
+        worksheet.mergeCells(`A${totalRow.number}:E${totalRow.number}`);
+        totalRow.eachCell((cell, colNum) => {
+            cell.font = { bold: true };
+            cell.border = borde;
+            cell.alignment = { horizontal: colNum === 6 ? 'center' : 'right' };
+        });
+
+        const lineRow = worksheet.lastRow.number + 2;
+        cols.forEach(col => {
+            worksheet.getCell(`${col}${lineRow}`).border = { bottom: { style: 'thin' } };
+        });
+
+        const rowF1 = lineRow + 1;
+        worksheet.mergeCells(`A${rowF1}:F${rowF1}`);
+        const f1 = worksheet.getCell(`A${rowF1}`);
+        f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+        f1.alignment = { horizontal: 'center' };
+        f1.font = { name: 'Arial', size: 9 };
+
+        const rowF2 = lineRow + 2;
+        worksheet.mergeCells(`A${rowF2}:F${rowF2}`);
+        const f2 = worksheet.getCell(`A${rowF2}`);
+        f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+        f2.alignment = { horizontal: 'center' };
+        f2.font = { name: 'Arial', size: 9 };
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=reporte-graduandos-acto.xlsx');
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Error");
+    }
+};
+
+
+// ================= DATOS DE UN CONTRATO (acto o anillo) =================
+// NoContrato se repite entre contratos de acto y de anillo, por eso el
+// tipo es obligatorio. Si hay filas repetidas se toma la más reciente.
+// Los recibos de anillo no tienen CodigoActo; los depósitos se ligan por NoRecibo.
+
+const formatoMonto = (v) => {
+    // Anillos guardan el monto como texto "1.400,00": se imprime tal cual
+    if (typeof v === 'string') return v || '0,00';
+    return new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(v || 0));
+};
+
+// Fechas 'YYYY-MM-DD'; las de 1900 son "sin fecha" en los datos viejos
+const fechaContrato = (f) => {
+    if (!f || f < '1901') return '';
+    return esFechaISO(f) ? aDMY(f) : f;
+};
+
+const cargarDatosContrato = async (NoContrato, tipo) => {
+    let contrato, cliente, seccionContrato, montos, filtroRecibos, paramsRecibos;
+
+    if (tipo === 'ACTO') {
+        const [rows] = await db.query(
+            `SELECT d.CodigoActo, d.NoContrato, d.NuCedula, d.Nombre, d.Txcontacto, d.MnContrato, d.MnDescuento,
+                    d.MnInicial, d.MnPagado, d.MnSaldo, d.chemise, DATE_FORMAT(d.fecha, '%Y-%m-%d') AS fecha,
+                    a.Fecha AS FechaActo, a.Hora, a.siglas, a.titulo, a.especialidad,
+                    (SELECT l.TxLugar FROM lugaracto l WHERE l.CoLugar = a.CoLugar LIMIT 1) AS lugar
+             FROM deactosgrados d
+             LEFT JOIN actosgrados a ON a.CodigoActo = d.CodigoActo
+             WHERE d.NoContrato = ?
+             ORDER BY d.id DESC LIMIT 1`,
+            [NoContrato]
+        );
+        if (rows.length === 0) return null;
+        contrato = rows[0];
+
+        cliente = {
+            cedula: contrato.NuCedula,
+            nombre: contrato.Nombre,
+            telefono: contrato.Txcontacto
+        };
+        seccionContrato = {
+            titulo: 'DATOS DEL ACTO',
+            campos: [
+                ['CÓDIGO ACTO', contrato.CodigoActo],
+                ['FECHA CONTRATO', fechaContrato(contrato.fecha)],
+                ['FECHA ACTO', fechaContrato(contrato.FechaActo)],
+                ['HORA ACTO', contrato.Hora],
+                ['INSTITUCIÓN', contrato.siglas],
+                ['LUGAR', contrato.lugar],
+                ['TÍTULO', contrato.titulo],
+                ['ESPECIALIDAD', contrato.especialidad],
+                ['CHEMISE', contrato.chemise]
+            ]
+        };
+        montos = [contrato.MnContrato, contrato.MnDescuento, contrato.MnInicial, contrato.MnPagado, contrato.MnSaldo];
+        filtroRecibos = 'r.NoContrato = ? AND r.CodigoActo = ? AND r.NuCedula = ?';
+        paramsRecibos = [NoContrato, contrato.CodigoActo, contrato.NuCedula];
+    } else {
+        const [rows] = await db.query(
+            `SELECT c.NoContrato, c.nucedula, c.titulo, c.especialidad, c.siglas, c.modelo, c.kilate, c.medida,
+                    c.peso, c.cazirc, c.tpzirc, c.mncontrato, c.mndescuento, c.mninicial, c.mnpagado, c.mnsaldo,
+                    c.MaEstado, c.Anulado, c.TxObservacion,
+                    DATE_FORMAT(c.feinicio, '%Y-%m-%d') AS feinicio,
+                    DATE_FORMAT(c.FeSolici, '%Y-%m-%d') AS FeSolici,
+                    DATE_FORMAT(c.FeFin, '%Y-%m-%d') AS FeFin
+             FROM contratos c
+             WHERE c.NoContrato = ?
+             ORDER BY c.id DESC LIMIT 1`,
+            [NoContrato]
+        );
+        if (rows.length === 0) return null;
+        contrato = rows[0];
+
+        const [cli] = await db.query(
+            'SELECT txnombre, txtelefono, txcelular FROM clientes WHERE nucedula = ? LIMIT 1',
+            [contrato.nucedula]
+        );
+        cliente = {
+            cedula: contrato.nucedula,
+            nombre: cli[0]?.txnombre,
+            telefono: [cli[0]?.txtelefono, cli[0]?.txcelular].filter(Boolean).join(' / ')
+        };
+        seccionContrato = {
+            titulo: 'DATOS DEL ANILLO',
+            campos: [
+                ['FECHA INICIO', fechaContrato(contrato.feinicio)],
+                ['ESTADO', String(contrato.Anulado) === '1' ? 'ANULADO' : etiquetaEstado(contrato.MaEstado)],
+                ['REQUERIDO EL', fechaContrato(contrato.FeSolici)],
+                ['FECHA ENTREGA', fechaContrato(contrato.FeFin)],
+                ['INSTITUCIÓN', contrato.siglas],
+                ['MODELO', contrato.modelo],
+                ['TÍTULO', contrato.titulo],
+                ['ESPECIALIDAD', contrato.especialidad],
+                ['KILATE', contrato.kilate],
+                ['MEDIDA', contrato.medida],
+                ['PESO', contrato.peso],
+                ['ZIRCONIO', [contrato.cazirc, contrato.tpzirc].filter(Boolean).join(' ')],
+                ['OBSERVACIÓN', contrato.TxObservacion]
+            ]
+        };
+        montos = [contrato.mncontrato, contrato.mndescuento, contrato.mninicial, contrato.mnpagado, contrato.mnsaldo];
+        filtroRecibos = 'r.NoContrato = ? AND r.NuCedula = ? AND (r.CodigoActo IS NULL OR r.CodigoActo = 0)';
+        paramsRecibos = [NoContrato, contrato.nucedula];
+    }
+
+    const [recibos] = await db.query(
+        `SELECT r.NoRecibo, DATE_FORMAT(r.FeRecibo, '%Y-%m-%d') AS FeRecibo, r.TpRecibo, r.TxConcepRec,
+                r.MnRecibo, r.Anulado
+         FROM recibopago r WHERE ${filtroRecibos} ORDER BY r.NoRecibo ASC`,
+        paramsRecibos
+    );
+
+    let depositos = [];
+    if (recibos.length > 0) {
+        [depositos] = await db.query(
+            `SELECT d.NoRecibo, DATE_FORMAT(d.Fecha, '%Y-%m-%d') AS Fecha, d.TipoOperacion, d.TxBanco,
+                    d.NuDeposito, d.MnDeposito
+             FROM depositos d
+             WHERE d.NoContrato = ? AND d.NoRecibo IN (?)
+             ORDER BY d.NoRecibo ASC, d.id ASC`,
+            [NoContrato, recibos.map(r => r.NoRecibo)]
+        );
+        // El depósito de un recibo anulado también queda anulado
+        const anulados = new Set(recibos.filter(r => String(r.Anulado) === '1').map(r => r.NoRecibo));
+        depositos.forEach(d => { d.Anulado = anulados.has(d.NoRecibo) ? '1' : '0'; });
+    }
+
+    const etiquetas = ['MONTO CONTRATO', 'DESCUENTO', 'MONTO INICIAL', 'MONTO PAGADO', 'SALDO'];
+
+    return {
+        titulo: `DATOS DEL CONTRATO N° ${NoContrato} (${tipo === 'ACTO' ? 'ACTO DE GRADO' : 'ANILLO'})`,
+        secciones: [
+            {
+                titulo: 'DATOS DEL CLIENTE',
+                campos: [['CÉDULA', cliente.cedula], ['NOMBRE', cliente.nombre], ['TELÉFONO', cliente.telefono]]
+            },
+            seccionContrato,
+            { titulo: 'MONTOS', campos: montos.map((m, i) => [etiquetas[i], formatoMonto(m)]) }
+        ],
+        recibos,
+        depositos
+    };
+};
+
+const COLS_RECIBOS_CONTRATO = [
+    { label: 'NO. RECIBO', width: 60, excelWidth: 14, valor: r => r.NoRecibo },
+    { label: 'FECHA', width: 55, excelWidth: 13, valor: r => fechaContrato(r.FeRecibo) },
+    { label: 'TIPO', width: 70, excelWidth: 18, valor: r => r.TpRecibo },
+    { label: 'CONCEPTO', width: 180, excelWidth: 45, valor: r => r.TxConcepRec },
+    { label: 'MONTO', width: 70, excelWidth: 15, valor: r => formatoMonto(r.MnRecibo), derecha: true },
+    { label: 'ESTADO', width: 60, excelWidth: 13, valor: r => (String(r.Anulado) === '1' ? 'ANULADO' : 'ACTIVO') }
+];
+
+const COLS_DEPOSITOS_CONTRATO = [
+    { label: 'NO. RECIBO', width: 60, excelWidth: 14, valor: d => d.NoRecibo },
+    { label: 'FECHA', width: 55, excelWidth: 13, valor: d => fechaContrato(d.Fecha) },
+    { label: 'OPERACIÓN', width: 90, excelWidth: 20, valor: d => d.TipoOperacion },
+    { label: 'BANCO', width: 120, excelWidth: 30, valor: d => d.TxBanco },
+    { label: 'REFERENCIA', width: 90, excelWidth: 20, valor: d => d.NuDeposito },
+    { label: 'MONTO', width: 80, excelWidth: 15, valor: d => formatoMonto(d.MnDeposito), derecha: true }
+];
+
+// Los anulados no suman
+const totalRecibosContrato = (recibos) =>
+    recibos.filter(r => String(r.Anulado) !== '1').reduce((acc, r) => acc + Number(r.MnRecibo || 0), 0);
+const totalDepositosContrato = (depositos) =>
+    depositos.filter(d => String(d.Anulado) !== '1').reduce((acc, d) => acc + Number(d.MnDeposito || 0), 0);
+
+const enviarPdfContrato = (res, datos, usuarioReporte, NoContrato) => {
+    const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 20, left: 50, right: 50 },
+        bufferPages: true
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=contrato-${NoContrato}.pdf`);
+    doc.pipe(res);
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    const rowHeight = 20;
+
+    const addHeader = () => {
+        try {
+            doc.image(logoPath, 50, 35, { width: 65 });
+        } catch (error) {
+            console.log("Error logo");
+        }
+
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
+            .text("Grado`s de Venezuela, C.A.", 130, 40)
+            .font('Helvetica').text("J-30591547-4", 130, 52);
+
+        const { fechaActual, horaActual } = getFechaHoraVenezuela();
+
+        doc.fontSize(8).font('Helvetica')
+            .text(`Fecha: ${fechaActual}`, 350, 40, { align: 'right' })
+            .text(`Hora: ${horaActual}`, 350, 50, { align: 'right' })
+            .text(`Usuario: ${usuarioReporte}`, 350, 60, { align: 'right' });
+
+        doc.moveTo(50, 85).lineTo(545, 85).lineWidth(0.5).stroke();
+        doc.fontSize(12).font('Helvetica-Bold').text(datos.titulo, 50, 95, { align: 'center' });
+        doc.moveTo(50, 115).lineTo(545, 115).lineWidth(0.5).stroke();
+    };
+
+    let y = 130;
+    // Cambia de hoja si lo que sigue no cabe antes del pie
+    const asegurar = (alto) => {
+        if (y + alto > 740) {
+            doc.addPage();
+            addHeader();
+            y = 130;
+        }
+    };
+
+    // Título de sección en negrita, como en el resto de reportes
+    const barraTitulo = (texto) => {
+        asegurar(rowHeight * 3);
+        doc.fillColor('#000000').fontSize(10).font('Helvetica-Bold')
+            .text(texto, 50, y + 4, { width: 495 });
+        y += rowHeight;
+    };
+
+    addHeader();
+
+    // Secciones de datos: dos campos por fila
+    datos.secciones.forEach(seccion => {
+        barraTitulo(seccion.titulo);
+        for (let i = 0; i < seccion.campos.length; i += 2) {
+            asegurar(rowHeight);
+            if ((i / 2 + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, y, 495, rowHeight).fill();
+            }
+            doc.fillColor('#000000');
+            seccion.campos.slice(i, i + 2).forEach(([label, valor], j) => {
+                const x = 50 + j * 247.5;
+                doc.rect(x, y, 247.5, rowHeight).stroke();
+                doc.fontSize(8).font('Helvetica-Bold').text(`${label}:`, x + 5, y + 6, { width: 85, lineBreak: false });
+                doc.font('Helvetica').text(String(valor ?? ''), x + 90, y + 6, { width: 153, lineBreak: false, ellipsis: true });
+            });
+            y += rowHeight;
+        }
+        y += 10;
+    });
+
+    const tabla = (titulo, columnas, filas, total) => {
+        barraTitulo(titulo);
+
+        const encabezado = () => {
+            let x = 50;
+            doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000');
+            columnas.forEach(col => {
+                doc.rect(x, y, col.width, rowHeight).stroke();
+                doc.text(col.label, x, y + 6, { width: col.width, align: 'center', lineBreak: false });
+                x += col.width;
+            });
+            y += rowHeight;
+        };
+        encabezado();
+
+        if (filas.length === 0) {
+            doc.rect(50, y, 495, rowHeight).stroke();
+            doc.font('Helvetica').fontSize(8).text('SIN REGISTROS', 50, y + 6, { width: 495, align: 'center' });
+            y += rowHeight + 10;
+            return;
+        }
+
+        filas.forEach((fila, index) => {
+            if (y + rowHeight > 740) {
+                asegurar(rowHeight);
+                encabezado();
+            }
+            if ((index + 1) % 2 === 0) {
+                doc.fillColor('#FFFFE0').rect(50, y, 495, rowHeight).fill();
+            }
+            // Recibos anulados en rojo, igual que en la pantalla de pagos
+            doc.fillColor(String(fila.Anulado) === '1' ? '#D32F2F' : '#000000').font('Helvetica').fontSize(8);
+            let x = 50;
+            columnas.forEach(col => {
+                doc.rect(x, y, col.width, rowHeight).stroke();
+                doc.text(String(col.valor(fila) ?? ''), x + 3, y + 6, {
+                    width: col.width - 6,
+                    align: col.derecha ? 'right' : (col.label === 'CONCEPTO' || col.label === 'BANCO' ? 'left' : 'center'),
+                    lineBreak: false,
+                    ellipsis: true
+                });
+                x += col.width;
+            });
+            doc.fillColor('#000000');
+            y += rowHeight;
+        });
+
+        asegurar(rowHeight);
+        const anchoMonto = columnas.find(c => c.label === 'MONTO').width;
+        const xMonto = 50 + columnas.slice(0, columnas.findIndex(c => c.label === 'MONTO')).reduce((a, c) => a + c.width, 0);
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.rect(50, y, xMonto - 50, rowHeight).stroke();
+        doc.text(total.label, 54, y + 6, { width: xMonto - 58, align: 'right' });
+        doc.rect(xMonto, y, anchoMonto, rowHeight).stroke();
+        doc.text(formatoMonto(total.valor), xMonto + 3, y + 6, { width: anchoMonto - 6, align: 'right' });
+        y += rowHeight + 10;
+    };
+
+    tabla('RECIBOS', COLS_RECIBOS_CONTRATO, datos.recibos,
+        { label: 'TOTAL RECIBOS (SIN ANULADOS)', valor: totalRecibosContrato(datos.recibos) });
+    tabla('DEPÓSITOS', COLS_DEPOSITOS_CONTRATO, datos.depositos,
+        { label: 'TOTAL DEPÓSITOS (SIN ANULADOS)', valor: totalDepositosContrato(datos.depositos) });
+
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < (range.start + range.count); i++) {
+        doc.switchToPage(i);
+        const footerBaseY = 750;
+        doc.moveTo(50, footerBaseY).lineTo(545, footerBaseY).lineWidth(0.5).stroke();
+        doc.fontSize(9).font('Helvetica').fillColor('#000000');
+        doc.text("Para Mayor Información Visite nuestro instagram @gradosdevzla", 50, footerBaseY + 10, { align: 'center', width: 495 });
+        doc.text("o escribanos a los correos info.gradosdevzla@gmail.com", 50, footerBaseY + 22, { align: 'center', width: 495 });
+
+        doc.fontSize(8).font('Helvetica-Bold')
+            .text(`Página ${i + 1} / ${range.count}`, 50, 785, { align: 'right', width: 495 });
+    }
+
+    doc.end();
+};
+
+const enviarExcelContrato = async (res, datos, usuarioReporte, NoContrato) => {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet(`Contrato ${NoContrato}`);
+    const cols = ['A', 'B', 'C', 'D', 'E', 'F'];
+    const borde = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+
+    // Anchos: el mayor de las dos tablas en cada columna; A también lleva
+    // las etiquetas de las secciones ("MONTO CONTRATO")
+    worksheet.columns = cols.map((_, i) => ({
+        width: Math.max(COLS_RECIBOS_CONTRATO[i].excelWidth, COLS_DEPOSITOS_CONTRATO[i].excelWidth, i === 0 ? 18 : 0)
+    }));
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    try {
+        const logoId = workbook.addImage({ filename: logoPath, extension: 'png' });
+        worksheet.addImage(logoId, { tl: { col: 0.1, row: 1.2 }, ext: { width: 60, height: 40 } });
+    } catch (e) {}
+    worksheet.getRow(2).height = 50;
+
+    const empresaCell = worksheet.getCell('B2');
+    empresaCell.value = "Grado`s de Venezuela, C.A.\nJ-30591547-4";
+    empresaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+    empresaCell.font = { name: 'Arial', bold: true, size: 9 };
+
+    const { fechaActual, horaActual } = getFechaHoraVenezuela();
+    const metaCell = worksheet.getCell('F2');
+    metaCell.value = `Fecha: ${fechaActual}\nHora: ${horaActual}\nUsuario: ${usuarioReporte}`;
+    metaCell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+    metaCell.font = { name: 'Arial', size: 8 };
+
+    cols.forEach(col => worksheet.getCell(`${col}5`).border = { bottom: { style: 'thin' } });
+    worksheet.mergeCells('A6:F6');
+    const tCell = worksheet.getCell('A6');
+    tCell.value = datos.titulo;
+    tCell.font = { bold: true, size: 13 };
+    tCell.alignment = { horizontal: 'center' };
+    cols.forEach(col => worksheet.getCell(`${col}6`).border = { bottom: { style: 'thin' } });
+
+    let fila = 8;
+
+    const barraTitulo = (texto) => {
+        worksheet.mergeCells(`A${fila}:F${fila}`);
+        const c = worksheet.getCell(`A${fila}`);
+        c.value = texto;
+        c.font = { bold: true, size: 11 };
+        fila++;
+    };
+
+    // Secciones: dos campos por fila (A etiqueta, B:C valor | D etiqueta, E:F valor)
+    datos.secciones.forEach(seccion => {
+        barraTitulo(seccion.titulo);
+        for (let i = 0; i < seccion.campos.length; i += 2) {
+            const esPar = (i / 2 + 1) % 2 === 0;
+            seccion.campos.slice(i, i + 2).forEach(([label, valor], j) => {
+                const [cl, cv1, cv2] = j === 0 ? ['A', 'B', 'C'] : ['D', 'E', 'F'];
+                const l = worksheet.getCell(`${cl}${fila}`);
+                l.value = label;
+                l.font = { bold: true };
+                l.border = borde;
+                worksheet.mergeCells(`${cv1}${fila}:${cv2}${fila}`);
+                const v = worksheet.getCell(`${cv1}${fila}`);
+                v.value = valor ?? '';
+                v.alignment = { horizontal: 'left' };
+                v.border = borde;
+                if (esPar) {
+                    [l, v].forEach(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFE0' } });
+                }
+            });
+            fila++;
+        }
+        fila++;
+    });
+
+    const tabla = (titulo, columnas, filas, total) => {
+        barraTitulo(titulo);
+
+        const h = worksheet.getRow(fila);
+        h.values = columnas.map(c => c.label);
+        h.eachCell(c => {
+            c.font = { bold: true };
+            c.alignment = { horizontal: 'center' };
+            c.border = borde;
+        });
+        fila++;
+
+        if (filas.length === 0) {
+            worksheet.mergeCells(`A${fila}:F${fila}`);
+            const c = worksheet.getCell(`A${fila}`);
+            c.value = 'SIN REGISTROS';
+            c.alignment = { horizontal: 'center' };
+            c.border = borde;
+            fila += 2;
+            return;
+        }
+
+        filas.forEach((item, index) => {
+            const row = worksheet.getRow(fila);
+            row.values = columnas.map(c => c.valor(item) ?? '');
+            const esPar = (index + 1) % 2 === 0;
+            const anulado = String(item.Anulado) === '1';
+            row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+                cell.border = borde;
+                const col = columnas[colNum - 1];
+                cell.alignment = {
+                    horizontal: col?.derecha ? 'right' : (col?.label === 'CONCEPTO' || col?.label === 'BANCO' ? 'left' : 'center'),
+                    vertical: 'middle'
+                };
+                if (anulado) cell.font = { color: { argb: 'FFD32F2F' }, bold: true };
+                if (esPar) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFE0' } };
+            });
+            fila++;
+        });
+
+        const idxMonto = columnas.findIndex(c => c.label === 'MONTO');
+        const colMonto = cols[idxMonto];
+        worksheet.mergeCells(`A${fila}:${cols[idxMonto - 1]}${fila}`);
+        const l = worksheet.getCell(`A${fila}`);
+        l.value = total.label;
+        l.font = { bold: true };
+        l.alignment = { horizontal: 'right' };
+        l.border = borde;
+        const v = worksheet.getCell(`${colMonto}${fila}`);
+        v.value = formatoMonto(total.valor);
+        v.font = { bold: true };
+        v.alignment = { horizontal: 'right' };
+        v.border = borde;
+        fila += 2;
+    };
+
+    tabla('RECIBOS', COLS_RECIBOS_CONTRATO, datos.recibos,
+        { label: 'TOTAL RECIBOS (SIN ANULADOS)', valor: totalRecibosContrato(datos.recibos) });
+    tabla('DEPÓSITOS', COLS_DEPOSITOS_CONTRATO, datos.depositos,
+        { label: 'TOTAL DEPÓSITOS (SIN ANULADOS)', valor: totalDepositosContrato(datos.depositos) });
+
+    cols.forEach(col => worksheet.getCell(`${col}${fila}`).border = { bottom: { style: 'thin' } });
+    worksheet.mergeCells(`A${fila + 1}:F${fila + 1}`);
+    const f1 = worksheet.getCell(`A${fila + 1}`);
+    f1.value = "Para Mayor Información Visite nuestro instagram @gradosdevzla";
+    f1.alignment = { horizontal: 'center' };
+    f1.font = { name: 'Arial', size: 9 };
+    worksheet.mergeCells(`A${fila + 2}:F${fila + 2}`);
+    const f2 = worksheet.getCell(`A${fila + 2}`);
+    f2.value = "o escribanos a los correos info.gradosdevzla@gmail.com";
+    f2.alignment = { horizontal: 'center' };
+    f2.font = { name: 'Arial', size: 9 };
+
+    worksheet.pageSetup = { fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=contrato-${NoContrato}.xlsx`);
+    await workbook.xlsx.write(res);
+    res.end();
+};
+
+// POST /reports/contractData { NoContrato, tipo: 'ACTO' | 'ANILLO', usuarioReporte, formato: 'PDF' | 'EXCEL' }
+exports.contractData = async (req, res) => {
+    const NoContrato = Number(req.body.NoContrato);
+    const { tipo, usuarioReporte, formato } = req.body;
+
+    if (!NoContrato) {
+        return res.status(400).json({ status: 'error', message: 'Número de contrato inválido.' });
+    }
+    if (tipo !== 'ACTO' && tipo !== 'ANILLO') {
+        return res.status(400).json({ status: 'error', message: 'Debe indicar si el contrato es de Acto o de Anillo.' });
+    }
+
+    try {
+        const datos = await cargarDatosContrato(NoContrato, tipo);
+
+        if (!datos) {
+            return res.status(404).json({
+                status: 'error',
+                message: `No se encontró el contrato de ${tipo === 'ACTO' ? 'acto' : 'anillo'} N° ${NoContrato}.`
+            });
+        }
+
+        if (formato === 'EXCEL') {
+            await enviarExcelContrato(res, datos, usuarioReporte, NoContrato);
+        } else {
+            enviarPdfContrato(res, datos, usuarioReporte, NoContrato);
+        }
+    } catch (error) {
+        console.error('Error al generar los datos del contrato:', error);
         if (!res.headersSent) {
             res.status(500).json({ status: 'error', message: 'Error interno al generar el reporte.' });
         }

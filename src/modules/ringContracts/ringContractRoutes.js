@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const ringContractController = require('./ringContractController');
+const { exigirCierreZ } = require('../reports/cierreZGuard');
 
 // ---------------- LECTURA ----------------
 // Lista con filtros: ?q=...&estado=1..9&todos=1&page=&limit=
@@ -22,8 +23,8 @@ router.get('/:id', ringContractController.getContractById);
 router.post('/create', ringContractController.createContract);
 
 // Modal de pagos: recibo y depósito por separado (igual que actContracts)
-router.post('/createRecibo', ringContractController.createReciboPago);
-router.post('/createDeposito', ringContractController.createDeposito);
+router.post('/createRecibo', exigirCierreZ, ringContractController.createReciboPago);
+router.post('/createDeposito', exigirCierreZ, ringContractController.createDeposito);
 
 // Pestañas Detalles + Regalías
 router.put('/update/:id', ringContractController.updateContract);
@@ -39,6 +40,6 @@ router.put('/updateTotals/:id', ringContractController.updateTotals);
 router.put('/:id/anularRecibo', ringContractController.anularRecibo);
 
 // Botón "Efectuar Pago": ReciboPago + Depositos + montos del contrato
-router.post('/pay/:id', ringContractController.payContract);
+router.post('/pay/:id', exigirCierreZ, ringContractController.payContract);
 
 module.exports = router;

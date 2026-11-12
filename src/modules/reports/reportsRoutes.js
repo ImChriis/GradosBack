@@ -13,12 +13,19 @@ router.post('/clientsExcel', reportsController.clientsExcel);
 router.post('/actListPdf', reportsController.actListPdf);
 router.post('/actListExcel', reportsController.actListExcel);
 router.post('/actListTxt', reportsController.actListTxt);
-router.post('/generateClosingPdf', reportsController.generateClosingPdf);
+router.post('/generateClosingPdf', reportsController.generateClosingPdf); // Cierre Z
+router.post('/generateClosingXPdf', reportsController.generateClosingXPdf);
+router.get('/closingZFecha', reportsController.closingZFecha);
 
 // Contratos de anillos
 router.post('/contractsByStatusPdf', reportsController.contractsByStatusPdf);
 router.post('/contractsByStatusExcel', reportsController.contractsByStatusExcel);
 router.post('/ringExpiringPdf', reportsController.ringExpiringPdf);
 router.post('/ringExpiringExcel', reportsController.ringExpiringExcel);
+router.get('/recibos', reportsController.recibosPorRango);
+router.get('/recibos/:NoRecibo', reportsController.reciboPorNumero);
+router.get('/graduatesByActPdf/:usuarioReporte', reportsController.graduatesByActPdf);
+router.get('/graduatesByActExcel/:usuarioReporte', reportsController.graduatesByActExcel);
+router.post('/contractData', reportsController.contractData);
 
 module.exports = router;

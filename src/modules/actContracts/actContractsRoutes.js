@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const actContractsController = require('./actContractsController');
+const { exigirCierreZ } = require('../reports/cierreZGuard');
 
 router.get('/', actContractsController.getActs);
 router.get('/abonos/:NoContrato/:NuCedula/:NoRecibo', actContractsController.getAbonosByUserContract); 
@@ -14,11 +15,11 @@ router.get('/recibos/:NoContrato/:CodigoActo/:NuCedula', actContractsController.
 router.post('/recalculateTotal', actContractsController.recalculateActTotal);
 router.post('/addUser', actContractsController.addUserToAct);
 router.post('/removeUser/:CodigoActo/:NuCedula', actContractsController.removeUserFromAct);
-router.post ('/createRecibo', actContractsController.createReciboPago);
+router.post ('/createRecibo', exigirCierreZ, actContractsController.createReciboPago);
 router.post('/createAct', actContractsController.createAct);
 router.put('/updateAct/:codigoActo', actContractsController.updateAct);
 router.put('/updateActUser/:CodigoActo/:NuCedula', actContractsController.updateActUser);
-router.post('/createDeposito', actContractsController.createDeposito);
+router.post('/createDeposito', exigirCierreZ, actContractsController.createDeposito);
 router.put('/updateTotals/:CodigoActo/:NuCedula', actContractsController.updateTotals);
 // Anula un recibo: lo marca en '1', devuelve el monto al saldo y se niega
 // si el recibo ya pertenece a un cierre

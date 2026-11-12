@@ -124,7 +124,7 @@ BEGIN
         'INSERT',
         NEW.`id`,
         NEW.`CodUser`,
-        JSON_OBJECT('id', NEW.`id`, 'CodigoActo', NEW.`CodigoActo`, 'NoContrato', NEW.`NoContrato`, 'NuCedula', NEW.`NuCedula`, 'Nombre', NEW.`Nombre`, 'Txcontacto', NEW.`Txcontacto`, 'MnContrato', NEW.`MnContrato`, 'MnDescuento', NEW.`MnDescuento`, 'MnPagado', NEW.`MnPagado`, 'MnSaldo', NEW.`MnSaldo`, 'MnInicial', NEW.`MnInicial`, 'MaEdoCont', NEW.`MaEdoCont`, 'CodUser', NEW.`CodUser`, 'chemise', NEW.`chemise`, 'fecha', NEW.`fecha`, 'CodSucursal', NEW.`CodSucursal`, 'NoCierre', NEW.`NoCierre`),
+        JSON_OBJECT('id', NEW.`id`, 'CodigoActo', NEW.`CodigoActo`, 'NoContrato', NEW.`NoContrato`, 'NuCedula', NEW.`NuCedula`, 'Nombre', NEW.`Nombre`, 'Txcontacto', NEW.`Txcontacto`, 'MnContrato', NEW.`MnContrato`, 'MnDescuento', NEW.`MnDescuento`, 'MnPagado', NEW.`MnPagado`, 'MnSaldo', NEW.`MnSaldo`, 'MnInicial', NEW.`MnInicial`, 'MaEdoCont', NEW.`MaEdoCont`, 'CodUser', NEW.`CodUser`, 'chemise', NEW.`chemise`, 'fecha', NEW.`fecha`, 'CodSucursal', NEW.`CodSucursal`, 'NoCierreZ', NEW.`NoCierreZ`),
         USER()
     );
 END $$
@@ -151,7 +151,7 @@ BEGIN
             IF(NEW.`chemise` <=> OLD.`chemise`, '', CONCAT('chemise: ', IFNULL(CAST(OLD.`chemise` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`chemise` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`fecha` <=> OLD.`fecha`, '', CONCAT('fecha: ', IFNULL(CAST(OLD.`fecha` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`fecha` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`CodSucursal` <=> OLD.`CodSucursal`, '', CONCAT('CodSucursal: ', IFNULL(CAST(OLD.`CodSucursal` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`CodSucursal` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`NoCierre` <=> OLD.`NoCierre`, '', CONCAT('NoCierre: ', IFNULL(CAST(OLD.`NoCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierre` AS CHAR), 'NULL'), '; '))
+            IF(NEW.`NoCierreZ` <=> OLD.`NoCierreZ`, '', CONCAT('NoCierreZ: ', IFNULL(CAST(OLD.`NoCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierreZ` AS CHAR), 'NULL'), '; '))
         );
 
     IF v_cambios <> '' THEN
@@ -177,7 +177,7 @@ BEGIN
         'DELETE',
         OLD.`id`,
         OLD.`CodUser`,
-        JSON_OBJECT('id', OLD.`id`, 'CodigoActo', OLD.`CodigoActo`, 'NoContrato', OLD.`NoContrato`, 'NuCedula', OLD.`NuCedula`, 'Nombre', OLD.`Nombre`, 'Txcontacto', OLD.`Txcontacto`, 'MnContrato', OLD.`MnContrato`, 'MnDescuento', OLD.`MnDescuento`, 'MnPagado', OLD.`MnPagado`, 'MnSaldo', OLD.`MnSaldo`, 'MnInicial', OLD.`MnInicial`, 'MaEdoCont', OLD.`MaEdoCont`, 'CodUser', OLD.`CodUser`, 'chemise', OLD.`chemise`, 'fecha', OLD.`fecha`, 'CodSucursal', OLD.`CodSucursal`, 'NoCierre', OLD.`NoCierre`),
+        JSON_OBJECT('id', OLD.`id`, 'CodigoActo', OLD.`CodigoActo`, 'NoContrato', OLD.`NoContrato`, 'NuCedula', OLD.`NuCedula`, 'Nombre', OLD.`Nombre`, 'Txcontacto', OLD.`Txcontacto`, 'MnContrato', OLD.`MnContrato`, 'MnDescuento', OLD.`MnDescuento`, 'MnPagado', OLD.`MnPagado`, 'MnSaldo', OLD.`MnSaldo`, 'MnInicial', OLD.`MnInicial`, 'MaEdoCont', OLD.`MaEdoCont`, 'CodUser', OLD.`CodUser`, 'chemise', OLD.`chemise`, 'fecha', OLD.`fecha`, 'CodSucursal', OLD.`CodSucursal`, 'NoCierreZ', OLD.`NoCierreZ`),
         USER()
     );
 END $$
@@ -196,7 +196,7 @@ BEGIN
         'INSERT',
         NEW.`id`,
         NEW.`CodUser`,
-        JSON_OBJECT('id', NEW.`id`, 'Tipo', NEW.`Tipo`, 'NoRecibo', NEW.`NoRecibo`, 'FeRecibo', NEW.`FeRecibo`, 'NuCedula', NEW.`NuCedula`, 'CodigoActo', NEW.`CodigoActo`, 'NoContrato', NEW.`NoContrato`, 'TpRecibo', NEW.`TpRecibo`, 'MnRecibo', NEW.`MnRecibo`, 'MnSaldoRec', NEW.`MnSaldoRec`, 'TxConcepRec', NEW.`TxConcepRec`, 'MaFormPag', NEW.`MaFormPag`, 'TxBanco', NEW.`TxBanco`, 'NuRefDocBan', NEW.`NuRefDocBan`, 'Anulado', NEW.`Anulado`, 'MnRecEfect', NEW.`MnRecEfect`, 'MnRecTarDeb', NEW.`MnRecTarDeb`, 'MnRecTarCre', NEW.`MnRecTarCre`, 'MnRecDep', NEW.`MnRecDep`, 'MnRecChep', NEW.`MnRecChep`, 'MnRecOtro', NEW.`MnRecOtro`, 'CodUser', NEW.`CodUser`, 'CodSucursal', NEW.`CodSucursal`, 'NoCierre', NEW.`NoCierre`, 'FechaCierre', NEW.`FechaCierre`),
+        JSON_OBJECT('id', NEW.`id`, 'Tipo', NEW.`Tipo`, 'NoRecibo', NEW.`NoRecibo`, 'FeRecibo', NEW.`FeRecibo`, 'NuCedula', NEW.`NuCedula`, 'CodigoActo', NEW.`CodigoActo`, 'NoContrato', NEW.`NoContrato`, 'TpRecibo', NEW.`TpRecibo`, 'MnRecibo', NEW.`MnRecibo`, 'MnSaldoRec', NEW.`MnSaldoRec`, 'TxConcepRec', NEW.`TxConcepRec`, 'MaFormPag', NEW.`MaFormPag`, 'TxBanco', NEW.`TxBanco`, 'NuRefDocBan', NEW.`NuRefDocBan`, 'Anulado', NEW.`Anulado`, 'MnRecEfect', NEW.`MnRecEfect`, 'MnRecTarDeb', NEW.`MnRecTarDeb`, 'MnRecTarCre', NEW.`MnRecTarCre`, 'MnRecDep', NEW.`MnRecDep`, 'MnRecChep', NEW.`MnRecChep`, 'MnRecOtro', NEW.`MnRecOtro`, 'CodUser', NEW.`CodUser`, 'CodSucursal', NEW.`CodSucursal`, 'NoCierreZ', NEW.`NoCierreZ`, 'FechaCierreZ', NEW.`FechaCierreZ`),
         USER()
     );
 END $$
@@ -230,8 +230,8 @@ BEGIN
             IF(NEW.`MnRecOtro` <=> OLD.`MnRecOtro`, '', CONCAT('MnRecOtro: ', IFNULL(CAST(OLD.`MnRecOtro` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`MnRecOtro` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`CodUser` <=> OLD.`CodUser`, '', CONCAT('CodUser: ', IFNULL(CAST(OLD.`CodUser` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`CodUser` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`CodSucursal` <=> OLD.`CodSucursal`, '', CONCAT('CodSucursal: ', IFNULL(CAST(OLD.`CodSucursal` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`CodSucursal` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`NoCierre` <=> OLD.`NoCierre`, '', CONCAT('NoCierre: ', IFNULL(CAST(OLD.`NoCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierre` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`FechaCierre` <=> OLD.`FechaCierre`, '', CONCAT('FechaCierre: ', IFNULL(CAST(OLD.`FechaCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`FechaCierre` AS CHAR), 'NULL'), '; '))
+            IF(NEW.`NoCierreZ` <=> OLD.`NoCierreZ`, '', CONCAT('NoCierreZ: ', IFNULL(CAST(OLD.`NoCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierreZ` AS CHAR), 'NULL'), '; ')),
+            IF(NEW.`FechaCierreZ` <=> OLD.`FechaCierreZ`, '', CONCAT('FechaCierreZ: ', IFNULL(CAST(OLD.`FechaCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`FechaCierreZ` AS CHAR), 'NULL'), '; '))
         );
 
     IF v_cambios <> '' THEN
@@ -257,7 +257,7 @@ BEGIN
         'DELETE',
         OLD.`id`,
         OLD.`CodUser`,
-        JSON_OBJECT('id', OLD.`id`, 'Tipo', OLD.`Tipo`, 'NoRecibo', OLD.`NoRecibo`, 'FeRecibo', OLD.`FeRecibo`, 'NuCedula', OLD.`NuCedula`, 'CodigoActo', OLD.`CodigoActo`, 'NoContrato', OLD.`NoContrato`, 'TpRecibo', OLD.`TpRecibo`, 'MnRecibo', OLD.`MnRecibo`, 'MnSaldoRec', OLD.`MnSaldoRec`, 'TxConcepRec', OLD.`TxConcepRec`, 'MaFormPag', OLD.`MaFormPag`, 'TxBanco', OLD.`TxBanco`, 'NuRefDocBan', OLD.`NuRefDocBan`, 'Anulado', OLD.`Anulado`, 'MnRecEfect', OLD.`MnRecEfect`, 'MnRecTarDeb', OLD.`MnRecTarDeb`, 'MnRecTarCre', OLD.`MnRecTarCre`, 'MnRecDep', OLD.`MnRecDep`, 'MnRecChep', OLD.`MnRecChep`, 'MnRecOtro', OLD.`MnRecOtro`, 'CodUser', OLD.`CodUser`, 'CodSucursal', OLD.`CodSucursal`, 'NoCierre', OLD.`NoCierre`, 'FechaCierre', OLD.`FechaCierre`),
+        JSON_OBJECT('id', OLD.`id`, 'Tipo', OLD.`Tipo`, 'NoRecibo', OLD.`NoRecibo`, 'FeRecibo', OLD.`FeRecibo`, 'NuCedula', OLD.`NuCedula`, 'CodigoActo', OLD.`CodigoActo`, 'NoContrato', OLD.`NoContrato`, 'TpRecibo', OLD.`TpRecibo`, 'MnRecibo', OLD.`MnRecibo`, 'MnSaldoRec', OLD.`MnSaldoRec`, 'TxConcepRec', OLD.`TxConcepRec`, 'MaFormPag', OLD.`MaFormPag`, 'TxBanco', OLD.`TxBanco`, 'NuRefDocBan', OLD.`NuRefDocBan`, 'Anulado', OLD.`Anulado`, 'MnRecEfect', OLD.`MnRecEfect`, 'MnRecTarDeb', OLD.`MnRecTarDeb`, 'MnRecTarCre', OLD.`MnRecTarCre`, 'MnRecDep', OLD.`MnRecDep`, 'MnRecChep', OLD.`MnRecChep`, 'MnRecOtro', OLD.`MnRecOtro`, 'CodUser', OLD.`CodUser`, 'CodSucursal', OLD.`CodSucursal`, 'NoCierreZ', OLD.`NoCierreZ`, 'FechaCierreZ', OLD.`FechaCierreZ`),
         USER()
     );
 END $$
@@ -276,7 +276,7 @@ BEGIN
         'INSERT',
         NEW.`id`,
         NEW.`CodUser`,
-        JSON_OBJECT('id', NEW.`id`, 'NoContrato', NEW.`NoContrato`, 'NuCedula', NEW.`NuCedula`, 'NoRecibo', NEW.`NoRecibo`, 'Fecha', NEW.`Fecha`, 'TipoOperacion', NEW.`TipoOperacion`, 'TxBanco', NEW.`TxBanco`, 'NuDeposito', NEW.`NuDeposito`, 'MnDeposito', NEW.`MnDeposito`, 'CodUser', NEW.`CodUser`, 'CodSucursal', NEW.`CodSucursal`, 'NoCierre', NEW.`NoCierre`, 'FechaCierre', NEW.`FechaCierre`),
+        JSON_OBJECT('id', NEW.`id`, 'NoContrato', NEW.`NoContrato`, 'NuCedula', NEW.`NuCedula`, 'NoRecibo', NEW.`NoRecibo`, 'Fecha', NEW.`Fecha`, 'TipoOperacion', NEW.`TipoOperacion`, 'TxBanco', NEW.`TxBanco`, 'NuDeposito', NEW.`NuDeposito`, 'MnDeposito', NEW.`MnDeposito`, 'CodUser', NEW.`CodUser`, 'CodSucursal', NEW.`CodSucursal`, 'NoCierreZ', NEW.`NoCierreZ`, 'FechaCierreZ', NEW.`FechaCierreZ`),
         USER()
     );
 END $$
@@ -298,8 +298,8 @@ BEGIN
             IF(NEW.`MnDeposito` <=> OLD.`MnDeposito`, '', CONCAT('MnDeposito: ', IFNULL(CAST(OLD.`MnDeposito` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`MnDeposito` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`CodUser` <=> OLD.`CodUser`, '', CONCAT('CodUser: ', IFNULL(CAST(OLD.`CodUser` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`CodUser` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`CodSucursal` <=> OLD.`CodSucursal`, '', CONCAT('CodSucursal: ', IFNULL(CAST(OLD.`CodSucursal` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`CodSucursal` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`NoCierre` <=> OLD.`NoCierre`, '', CONCAT('NoCierre: ', IFNULL(CAST(OLD.`NoCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierre` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`FechaCierre` <=> OLD.`FechaCierre`, '', CONCAT('FechaCierre: ', IFNULL(CAST(OLD.`FechaCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`FechaCierre` AS CHAR), 'NULL'), '; '))
+            IF(NEW.`NoCierreZ` <=> OLD.`NoCierreZ`, '', CONCAT('NoCierreZ: ', IFNULL(CAST(OLD.`NoCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierreZ` AS CHAR), 'NULL'), '; ')),
+            IF(NEW.`FechaCierreZ` <=> OLD.`FechaCierreZ`, '', CONCAT('FechaCierreZ: ', IFNULL(CAST(OLD.`FechaCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`FechaCierreZ` AS CHAR), 'NULL'), '; '))
         );
 
     IF v_cambios <> '' THEN
@@ -325,7 +325,7 @@ BEGIN
         'DELETE',
         OLD.`id`,
         OLD.`CodUser`,
-        JSON_OBJECT('id', OLD.`id`, 'NoContrato', OLD.`NoContrato`, 'NuCedula', OLD.`NuCedula`, 'NoRecibo', OLD.`NoRecibo`, 'Fecha', OLD.`Fecha`, 'TipoOperacion', OLD.`TipoOperacion`, 'TxBanco', OLD.`TxBanco`, 'NuDeposito', OLD.`NuDeposito`, 'MnDeposito', OLD.`MnDeposito`, 'CodUser', OLD.`CodUser`, 'CodSucursal', OLD.`CodSucursal`, 'NoCierre', OLD.`NoCierre`, 'FechaCierre', OLD.`FechaCierre`),
+        JSON_OBJECT('id', OLD.`id`, 'NoContrato', OLD.`NoContrato`, 'NuCedula', OLD.`NuCedula`, 'NoRecibo', OLD.`NoRecibo`, 'Fecha', OLD.`Fecha`, 'TipoOperacion', OLD.`TipoOperacion`, 'TxBanco', OLD.`TxBanco`, 'NuDeposito', OLD.`NuDeposito`, 'MnDeposito', OLD.`MnDeposito`, 'CodUser', OLD.`CodUser`, 'CodSucursal', OLD.`CodSucursal`, 'NoCierreZ', OLD.`NoCierreZ`, 'FechaCierreZ', OLD.`FechaCierreZ`),
         USER()
     );
 END $$
@@ -467,7 +467,7 @@ BEGIN
         'INSERT',
         NEW.`Id`,
         NULL,
-        JSON_OBJECT('Id', NEW.`Id`, 'CoSucursal', NEW.`CoSucursal`, 'NbSucursal', NEW.`NbSucursal`, 'Producto', NEW.`Producto`, 'Nombre', NEW.`Nombre`, 'Rif', NEW.`Rif`, 'Direccion', NEW.`Direccion`, 'Telefono', NEW.`Telefono`, 'Fax', NEW.`Fax`, 'feregistro', NEW.`feregistro`, 'txclaveadm', '***', 'NoRecibo', NEW.`NoRecibo`, 'NoContrato', NEW.`NoContrato`, 'NoActo', NEW.`NoActo`, 'CaDiasFab', NEW.`CaDiasFab`, 'CaDiasEngaste', NEW.`CaDiasEngaste`, 'MaFormRec', NEW.`MaFormRec`, 'PcOro18', NEW.`PcOro18`, 'PcOro14', NEW.`PcOro14`, 'PcOro10', NEW.`PcOro10`, 'MnMerma', NEW.`MnMerma`, 'MnCostOro', NEW.`MnCostOro`, 'Impuesto', NEW.`Impuesto`, 'MnCostoMano', NEW.`MnCostoMano`, 'UbicacionLogo', NEW.`UbicacionLogo`, 'UbicacionRpt', NEW.`UbicacionRpt`, 'TxMensaje1', NEW.`TxMensaje1`, 'TxMensaje2', NEW.`TxMensaje2`, 'TxMensaje3', NEW.`TxMensaje3`, 'GeneraNoRecibo', NEW.`GeneraNoRecibo`, 'GeneraNoContrato', NEW.`GeneraNoContrato`, 'GeneraNoActo', NEW.`GeneraNoActo`, 'GeneraNoCierre', NEW.`GeneraNoCierre`, 'NoCierre', NEW.`NoCierre`),
+        JSON_OBJECT('Id', NEW.`Id`, 'CoSucursal', NEW.`CoSucursal`, 'NbSucursal', NEW.`NbSucursal`, 'Producto', NEW.`Producto`, 'Nombre', NEW.`Nombre`, 'Rif', NEW.`Rif`, 'Direccion', NEW.`Direccion`, 'Telefono', NEW.`Telefono`, 'Fax', NEW.`Fax`, 'feregistro', NEW.`feregistro`, 'txclaveadm', '***', 'NoRecibo', NEW.`NoRecibo`, 'NoContrato', NEW.`NoContrato`, 'NoActo', NEW.`NoActo`, 'CaDiasFab', NEW.`CaDiasFab`, 'CaDiasEngaste', NEW.`CaDiasEngaste`, 'MaFormRec', NEW.`MaFormRec`, 'PcOro18', NEW.`PcOro18`, 'PcOro14', NEW.`PcOro14`, 'PcOro10', NEW.`PcOro10`, 'MnMerma', NEW.`MnMerma`, 'MnCostOro', NEW.`MnCostOro`, 'Impuesto', NEW.`Impuesto`, 'MnCostoMano', NEW.`MnCostoMano`, 'UbicacionLogo', NEW.`UbicacionLogo`, 'UbicacionRpt', NEW.`UbicacionRpt`, 'TxMensaje1', NEW.`TxMensaje1`, 'TxMensaje2', NEW.`TxMensaje2`, 'TxMensaje3', NEW.`TxMensaje3`, 'GeneraNoRecibo', NEW.`GeneraNoRecibo`, 'GeneraNoContrato', NEW.`GeneraNoContrato`, 'GeneraNoActo', NEW.`GeneraNoActo`, 'GeneraNoCierre', NEW.`GeneraNoCierre`, 'NoCierreZ', NEW.`NoCierreZ`),
         USER()
     );
 END $$
@@ -511,7 +511,7 @@ BEGIN
             IF(NEW.`GeneraNoContrato` <=> OLD.`GeneraNoContrato`, '', CONCAT('GeneraNoContrato: ', IFNULL(CAST(OLD.`GeneraNoContrato` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`GeneraNoContrato` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`GeneraNoActo` <=> OLD.`GeneraNoActo`, '', CONCAT('GeneraNoActo: ', IFNULL(CAST(OLD.`GeneraNoActo` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`GeneraNoActo` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`GeneraNoCierre` <=> OLD.`GeneraNoCierre`, '', CONCAT('GeneraNoCierre: ', IFNULL(CAST(OLD.`GeneraNoCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`GeneraNoCierre` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`NoCierre` <=> OLD.`NoCierre`, '', CONCAT('NoCierre: ', IFNULL(CAST(OLD.`NoCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierre` AS CHAR), 'NULL'), '; '))
+            IF(NEW.`NoCierreZ` <=> OLD.`NoCierreZ`, '', CONCAT('NoCierreZ: ', IFNULL(CAST(OLD.`NoCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierreZ` AS CHAR), 'NULL'), '; '))
         );
 
     IF v_cambios <> '' THEN
@@ -537,7 +537,7 @@ BEGIN
         'DELETE',
         OLD.`Id`,
         NULL,
-        JSON_OBJECT('Id', OLD.`Id`, 'CoSucursal', OLD.`CoSucursal`, 'NbSucursal', OLD.`NbSucursal`, 'Producto', OLD.`Producto`, 'Nombre', OLD.`Nombre`, 'Rif', OLD.`Rif`, 'Direccion', OLD.`Direccion`, 'Telefono', OLD.`Telefono`, 'Fax', OLD.`Fax`, 'feregistro', OLD.`feregistro`, 'txclaveadm', '***', 'NoRecibo', OLD.`NoRecibo`, 'NoContrato', OLD.`NoContrato`, 'NoActo', OLD.`NoActo`, 'CaDiasFab', OLD.`CaDiasFab`, 'CaDiasEngaste', OLD.`CaDiasEngaste`, 'MaFormRec', OLD.`MaFormRec`, 'PcOro18', OLD.`PcOro18`, 'PcOro14', OLD.`PcOro14`, 'PcOro10', OLD.`PcOro10`, 'MnMerma', OLD.`MnMerma`, 'MnCostOro', OLD.`MnCostOro`, 'Impuesto', OLD.`Impuesto`, 'MnCostoMano', OLD.`MnCostoMano`, 'UbicacionLogo', OLD.`UbicacionLogo`, 'UbicacionRpt', OLD.`UbicacionRpt`, 'TxMensaje1', OLD.`TxMensaje1`, 'TxMensaje2', OLD.`TxMensaje2`, 'TxMensaje3', OLD.`TxMensaje3`, 'GeneraNoRecibo', OLD.`GeneraNoRecibo`, 'GeneraNoContrato', OLD.`GeneraNoContrato`, 'GeneraNoActo', OLD.`GeneraNoActo`, 'GeneraNoCierre', OLD.`GeneraNoCierre`, 'NoCierre', OLD.`NoCierre`),
+        JSON_OBJECT('Id', OLD.`Id`, 'CoSucursal', OLD.`CoSucursal`, 'NbSucursal', OLD.`NbSucursal`, 'Producto', OLD.`Producto`, 'Nombre', OLD.`Nombre`, 'Rif', OLD.`Rif`, 'Direccion', OLD.`Direccion`, 'Telefono', OLD.`Telefono`, 'Fax', OLD.`Fax`, 'feregistro', OLD.`feregistro`, 'txclaveadm', '***', 'NoRecibo', OLD.`NoRecibo`, 'NoContrato', OLD.`NoContrato`, 'NoActo', OLD.`NoActo`, 'CaDiasFab', OLD.`CaDiasFab`, 'CaDiasEngaste', OLD.`CaDiasEngaste`, 'MaFormRec', OLD.`MaFormRec`, 'PcOro18', OLD.`PcOro18`, 'PcOro14', OLD.`PcOro14`, 'PcOro10', OLD.`PcOro10`, 'MnMerma', OLD.`MnMerma`, 'MnCostOro', OLD.`MnCostOro`, 'Impuesto', OLD.`Impuesto`, 'MnCostoMano', OLD.`MnCostoMano`, 'UbicacionLogo', OLD.`UbicacionLogo`, 'UbicacionRpt', OLD.`UbicacionRpt`, 'TxMensaje1', OLD.`TxMensaje1`, 'TxMensaje2', OLD.`TxMensaje2`, 'TxMensaje3', OLD.`TxMensaje3`, 'GeneraNoRecibo', OLD.`GeneraNoRecibo`, 'GeneraNoContrato', OLD.`GeneraNoContrato`, 'GeneraNoActo', OLD.`GeneraNoActo`, 'GeneraNoCierre', OLD.`GeneraNoCierre`, 'NoCierreZ', OLD.`NoCierreZ`),
         USER()
     );
 END $$
@@ -857,7 +857,7 @@ BEGIN
         'INSERT',
         NEW.`id`,
         NEW.`CodUser`,
-        JSON_OBJECT('id', NEW.`id`, 'NoContrato', NEW.`NoContrato`, 'nucedula', NEW.`nucedula`, 'titulo', NEW.`titulo`, 'especialidad', NEW.`especialidad`, 'siglas', NEW.`siglas`, 'feinicio', NEW.`feinicio`, 'modelo', NEW.`modelo`, 'kilate', NEW.`kilate`, 'medida', NEW.`medida`, 'cazirc', NEW.`cazirc`, 'tpzirc', NEW.`tpzirc`, 'peso', NEW.`peso`, 'mncontrato', NEW.`mncontrato`, 'mndescuento', NEW.`mndescuento`, 'mninicial', NEW.`mninicial`, 'mnpagado', NEW.`mnpagado`, 'mnsaldo', NEW.`mnsaldo`, 'InActivo', NEW.`InActivo`, 'MaEstado', NEW.`MaEstado`, 'FeSolici', NEW.`FeSolici`, 'Feinifab', NEW.`Feinifab`, 'FeFinFab', NEW.`FeFinFab`, 'FeIniEng', NEW.`FeIniEng`, 'FeFinEng', NEW.`FeFinEng`, 'FeFin', NEW.`FeFin`, 'nuordenfab', NEW.`nuordenfab`, 'txconcepto', NEW.`txconcepto`, 'MaTpCont', NEW.`MaTpCont`, 'inmedalla', NEW.`inmedalla`, 'inestuche', NEW.`inestuche`, 'incinta', NEW.`incinta`, 'inbotoninst', NEW.`inbotoninst`, 'inbotesp', NEW.`inbotesp`, 'indiploma', NEW.`indiploma`, 'inportadip', NEW.`inportadip`, 'inalbumesp', NEW.`inalbumesp`, 'inalbumsenc', NEW.`inalbumsenc`, 'inllavero', NEW.`inllavero`, 'inportanombre', NEW.`inportanombre`, 'infotografia', NEW.`infotografia`, 'intoga', NEW.`intoga`, 'invideo', NEW.`invideo`, 'indescuento', NEW.`indescuento`, 'Inotroreg', NEW.`Inotroreg`, 'inplaca', NEW.`inplaca`, 'cafotografia', NEW.`cafotografia`, 'TxOtroReg', NEW.`TxOtroReg`, 'TxPlaca', NEW.`TxPlaca`, 'TxDiploma', NEW.`TxDiploma`, 'Anulado', NEW.`Anulado`, 'MnCostoAnillo', NEW.`MnCostoAnillo`, 'CodUser', NEW.`CodUser`, 'CodSucursal', NEW.`CodSucursal`, 'Exonerado', NEW.`Exonerado`, 'TxObservacion', NEW.`TxObservacion`, 'NoCierre', NEW.`NoCierre`, 'FechaCierre', NEW.`FechaCierre`),
+        JSON_OBJECT('id', NEW.`id`, 'NoContrato', NEW.`NoContrato`, 'nucedula', NEW.`nucedula`, 'titulo', NEW.`titulo`, 'especialidad', NEW.`especialidad`, 'siglas', NEW.`siglas`, 'feinicio', NEW.`feinicio`, 'modelo', NEW.`modelo`, 'kilate', NEW.`kilate`, 'medida', NEW.`medida`, 'cazirc', NEW.`cazirc`, 'tpzirc', NEW.`tpzirc`, 'peso', NEW.`peso`, 'mncontrato', NEW.`mncontrato`, 'mndescuento', NEW.`mndescuento`, 'mninicial', NEW.`mninicial`, 'mnpagado', NEW.`mnpagado`, 'mnsaldo', NEW.`mnsaldo`, 'InActivo', NEW.`InActivo`, 'MaEstado', NEW.`MaEstado`, 'FeSolici', NEW.`FeSolici`, 'Feinifab', NEW.`Feinifab`, 'FeFinFab', NEW.`FeFinFab`, 'FeIniEng', NEW.`FeIniEng`, 'FeFinEng', NEW.`FeFinEng`, 'FeFin', NEW.`FeFin`, 'nuordenfab', NEW.`nuordenfab`, 'txconcepto', NEW.`txconcepto`, 'MaTpCont', NEW.`MaTpCont`, 'inmedalla', NEW.`inmedalla`, 'inestuche', NEW.`inestuche`, 'incinta', NEW.`incinta`, 'inbotoninst', NEW.`inbotoninst`, 'inbotesp', NEW.`inbotesp`, 'indiploma', NEW.`indiploma`, 'inportadip', NEW.`inportadip`, 'inalbumesp', NEW.`inalbumesp`, 'inalbumsenc', NEW.`inalbumsenc`, 'inllavero', NEW.`inllavero`, 'inportanombre', NEW.`inportanombre`, 'infotografia', NEW.`infotografia`, 'intoga', NEW.`intoga`, 'invideo', NEW.`invideo`, 'indescuento', NEW.`indescuento`, 'Inotroreg', NEW.`Inotroreg`, 'inplaca', NEW.`inplaca`, 'cafotografia', NEW.`cafotografia`, 'TxOtroReg', NEW.`TxOtroReg`, 'TxPlaca', NEW.`TxPlaca`, 'TxDiploma', NEW.`TxDiploma`, 'Anulado', NEW.`Anulado`, 'MnCostoAnillo', NEW.`MnCostoAnillo`, 'CodUser', NEW.`CodUser`, 'CodSucursal', NEW.`CodSucursal`, 'Exonerado', NEW.`Exonerado`, 'TxObservacion', NEW.`TxObservacion`, 'NoCierreZ', NEW.`NoCierreZ`, 'FechaCierreZ', NEW.`FechaCierreZ`),
         USER()
     );
 END $$
@@ -924,8 +924,8 @@ BEGIN
             IF(NEW.`CodSucursal` <=> OLD.`CodSucursal`, '', CONCAT('CodSucursal: ', IFNULL(CAST(OLD.`CodSucursal` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`CodSucursal` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`Exonerado` <=> OLD.`Exonerado`, '', CONCAT('Exonerado: ', IFNULL(CAST(OLD.`Exonerado` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`Exonerado` AS CHAR), 'NULL'), '; ')),
             IF(NEW.`TxObservacion` <=> OLD.`TxObservacion`, '', CONCAT('TxObservacion: ', IFNULL(CAST(OLD.`TxObservacion` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`TxObservacion` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`NoCierre` <=> OLD.`NoCierre`, '', CONCAT('NoCierre: ', IFNULL(CAST(OLD.`NoCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierre` AS CHAR), 'NULL'), '; ')),
-            IF(NEW.`FechaCierre` <=> OLD.`FechaCierre`, '', CONCAT('FechaCierre: ', IFNULL(CAST(OLD.`FechaCierre` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`FechaCierre` AS CHAR), 'NULL'), '; '))
+            IF(NEW.`NoCierreZ` <=> OLD.`NoCierreZ`, '', CONCAT('NoCierreZ: ', IFNULL(CAST(OLD.`NoCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`NoCierreZ` AS CHAR), 'NULL'), '; ')),
+            IF(NEW.`FechaCierreZ` <=> OLD.`FechaCierreZ`, '', CONCAT('FechaCierreZ: ', IFNULL(CAST(OLD.`FechaCierreZ` AS CHAR), 'NULL'), ' -> ', IFNULL(CAST(NEW.`FechaCierreZ` AS CHAR), 'NULL'), '; '))
         );
 
     IF v_cambios <> '' THEN
@@ -951,7 +951,7 @@ BEGIN
         'DELETE',
         OLD.`id`,
         OLD.`CodUser`,
-        JSON_OBJECT('id', OLD.`id`, 'NoContrato', OLD.`NoContrato`, 'nucedula', OLD.`nucedula`, 'titulo', OLD.`titulo`, 'especialidad', OLD.`especialidad`, 'siglas', OLD.`siglas`, 'feinicio', OLD.`feinicio`, 'modelo', OLD.`modelo`, 'kilate', OLD.`kilate`, 'medida', OLD.`medida`, 'cazirc', OLD.`cazirc`, 'tpzirc', OLD.`tpzirc`, 'peso', OLD.`peso`, 'mncontrato', OLD.`mncontrato`, 'mndescuento', OLD.`mndescuento`, 'mninicial', OLD.`mninicial`, 'mnpagado', OLD.`mnpagado`, 'mnsaldo', OLD.`mnsaldo`, 'InActivo', OLD.`InActivo`, 'MaEstado', OLD.`MaEstado`, 'FeSolici', OLD.`FeSolici`, 'Feinifab', OLD.`Feinifab`, 'FeFinFab', OLD.`FeFinFab`, 'FeIniEng', OLD.`FeIniEng`, 'FeFinEng', OLD.`FeFinEng`, 'FeFin', OLD.`FeFin`, 'nuordenfab', OLD.`nuordenfab`, 'txconcepto', OLD.`txconcepto`, 'MaTpCont', OLD.`MaTpCont`, 'inmedalla', OLD.`inmedalla`, 'inestuche', OLD.`inestuche`, 'incinta', OLD.`incinta`, 'inbotoninst', OLD.`inbotoninst`, 'inbotesp', OLD.`inbotesp`, 'indiploma', OLD.`indiploma`, 'inportadip', OLD.`inportadip`, 'inalbumesp', OLD.`inalbumesp`, 'inalbumsenc', OLD.`inalbumsenc`, 'inllavero', OLD.`inllavero`, 'inportanombre', OLD.`inportanombre`, 'infotografia', OLD.`infotografia`, 'intoga', OLD.`intoga`, 'invideo', OLD.`invideo`, 'indescuento', OLD.`indescuento`, 'Inotroreg', OLD.`Inotroreg`, 'inplaca', OLD.`inplaca`, 'cafotografia', OLD.`cafotografia`, 'TxOtroReg', OLD.`TxOtroReg`, 'TxPlaca', OLD.`TxPlaca`, 'TxDiploma', OLD.`TxDiploma`, 'Anulado', OLD.`Anulado`, 'MnCostoAnillo', OLD.`MnCostoAnillo`, 'CodUser', OLD.`CodUser`, 'CodSucursal', OLD.`CodSucursal`, 'Exonerado', OLD.`Exonerado`, 'TxObservacion', OLD.`TxObservacion`, 'NoCierre', OLD.`NoCierre`, 'FechaCierre', OLD.`FechaCierre`),
+        JSON_OBJECT('id', OLD.`id`, 'NoContrato', OLD.`NoContrato`, 'nucedula', OLD.`nucedula`, 'titulo', OLD.`titulo`, 'especialidad', OLD.`especialidad`, 'siglas', OLD.`siglas`, 'feinicio', OLD.`feinicio`, 'modelo', OLD.`modelo`, 'kilate', OLD.`kilate`, 'medida', OLD.`medida`, 'cazirc', OLD.`cazirc`, 'tpzirc', OLD.`tpzirc`, 'peso', OLD.`peso`, 'mncontrato', OLD.`mncontrato`, 'mndescuento', OLD.`mndescuento`, 'mninicial', OLD.`mninicial`, 'mnpagado', OLD.`mnpagado`, 'mnsaldo', OLD.`mnsaldo`, 'InActivo', OLD.`InActivo`, 'MaEstado', OLD.`MaEstado`, 'FeSolici', OLD.`FeSolici`, 'Feinifab', OLD.`Feinifab`, 'FeFinFab', OLD.`FeFinFab`, 'FeIniEng', OLD.`FeIniEng`, 'FeFinEng', OLD.`FeFinEng`, 'FeFin', OLD.`FeFin`, 'nuordenfab', OLD.`nuordenfab`, 'txconcepto', OLD.`txconcepto`, 'MaTpCont', OLD.`MaTpCont`, 'inmedalla', OLD.`inmedalla`, 'inestuche', OLD.`inestuche`, 'incinta', OLD.`incinta`, 'inbotoninst', OLD.`inbotoninst`, 'inbotesp', OLD.`inbotesp`, 'indiploma', OLD.`indiploma`, 'inportadip', OLD.`inportadip`, 'inalbumesp', OLD.`inalbumesp`, 'inalbumsenc', OLD.`inalbumsenc`, 'inllavero', OLD.`inllavero`, 'inportanombre', OLD.`inportanombre`, 'infotografia', OLD.`infotografia`, 'intoga', OLD.`intoga`, 'invideo', OLD.`invideo`, 'indescuento', OLD.`indescuento`, 'Inotroreg', OLD.`Inotroreg`, 'inplaca', OLD.`inplaca`, 'cafotografia', OLD.`cafotografia`, 'TxOtroReg', OLD.`TxOtroReg`, 'TxPlaca', OLD.`TxPlaca`, 'TxDiploma', OLD.`TxDiploma`, 'Anulado', OLD.`Anulado`, 'MnCostoAnillo', OLD.`MnCostoAnillo`, 'CodUser', OLD.`CodUser`, 'CodSucursal', OLD.`CodSucursal`, 'Exonerado', OLD.`Exonerado`, 'TxObservacion', OLD.`TxObservacion`, 'NoCierreZ', OLD.`NoCierreZ`, 'FechaCierreZ', OLD.`FechaCierreZ`),
         USER()
     );
 END $$

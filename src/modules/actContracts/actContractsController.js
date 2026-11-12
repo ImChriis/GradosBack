@@ -532,11 +532,11 @@ exports.removeUserFromAct = async (req, res) => {
         const registro = resPersona[0];
 
         // --- PASO 2: Validar si el registro ya forma parte de un Cierre Diario ---
-        if (registro.NoCierre && registro.NoCierre !== '' && registro.NoCierre !== 0) {
+        if (registro.NoCierreZ && registro.NoCierreZ !== '' && registro.NoCierreZ !== 0) {
             await connection.rollback();
             return res.status(400).json({
                 status: 'error',
-                message: `No se puede eliminar: El contrato N° ${registro.Nocontrato} ya fue auditado en el Cierre N° ${registro.NoCierre}.`
+                message: `No se puede eliminar: El contrato N° ${registro.Nocontrato} ya fue auditado en el Cierre N° ${registro.NoCierreZ}.`
             });
         }
 
@@ -639,7 +639,7 @@ exports.getRecibosByUserContract = async (req, res) => {
     }
     
     try{
-        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec, Anulado, NoCierre, FechaCierre FROM ReciboPago WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ? ORDER BY NoRecibo DESC`;
+        const sql = `SELECT NoRecibo, ferecibo, mnrecibo, TxConcepRec, Anulado, NoCierreZ, FechaCierreZ FROM ReciboPago WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ? ORDER BY NoRecibo DESC`;
         const [rows] = await db.execute(sql, [NoContrato, CodigoActo, NuCedula]);
 
         if(rows.length === 0){
@@ -907,12 +907,12 @@ exports.updateTotals = async (req, res) => {
 // del registro: MnPagado baja y MnSaldo se recalcula con la misma fórmula que
 // usa el modal (MnContrato - MnPagado).
 //
-// Un recibo con NoCierre o FechaCierre ya pertenece a un cierre diario y no
+// Un recibo con NoCierreZ o FechaCierreZ ya pertenece a un cierre diario y no
 // se puede anular.
 const perteneceACierre = (recibo) => {
-    const cierre = recibo.NoCierre;
+    const cierre = recibo.NoCierreZ;
     if (cierre !== null && cierre !== undefined && cierre !== '' && Number(cierre) !== 0) return true;
-    return recibo.FechaCierre !== null && recibo.FechaCierre !== undefined && recibo.FechaCierre !== '';
+    return recibo.FechaCierreZ !== null && recibo.FechaCierreZ !== undefined && recibo.FechaCierreZ !== '';
 };
 
 exports.anularRecibo = async (req, res) => {
@@ -933,7 +933,7 @@ exports.anularRecibo = async (req, res) => {
 
         // MISMA llave que getRecibosByUserContract: NoContrato + CodigoActo + NuCedula
         const [recibos] = await connection.execute(
-            `SELECT id, NoRecibo, MnRecibo, Anulado, NoCierre, FechaCierre
+            `SELECT id, NoRecibo, MnRecibo, Anulado, NoCierreZ, FechaCierreZ
              FROM recibopago
              WHERE NoContrato = ? AND CodigoActo = ? AND NuCedula = ? AND NoRecibo = ?
              FOR UPDATE`,

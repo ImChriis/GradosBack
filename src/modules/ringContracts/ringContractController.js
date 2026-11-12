@@ -261,8 +261,8 @@ exports.getRecibos = async (req, res) => {
         const { id } = req.params;
         const [rows] = await db.query(
             `SELECT r.id, r.NoRecibo, r.FeRecibo, r.ferecibo, r.MnRecibo, r.mnsaldorec, r.TpRecibo,
-                    r.TxBanco, r.NuRefDocBan, r.TxConcepRec, r.CodSucursal, r.CodUser, r.NoCierre,
-                    r.FechaCierre, r.Anulado
+                    r.TxBanco, r.NuRefDocBan, r.TxConcepRec, r.CodSucursal, r.CodUser, r.NoCierreZ,
+                    r.FechaCierreZ, r.Anulado
              FROM recibopago r
              INNER JOIN contratos c ON c.NoContrato = r.NoContrato AND c.nucedula = r.NuCedula
              WHERE c.id = ? AND (r.CodigoActo IS NULL OR r.CodigoActo = 0)
@@ -539,12 +539,12 @@ exports.updateTotals = async (req, res) => {
 // del contrato: mnpagado baja y mnsaldo se recalcula con la misma fórmula
 // que la pestaña Saldo (mncontrato - mndescuento - mnpagado).
 //
-// Un recibo que ya forma parte de un cierre NO se puede anular: NoCierre o
-// FechaCierre con datos significa que otra transacción lo reclamó.
+// Un recibo que ya forma parte de un cierre NO se puede anular: NoCierreZ o
+// FechaCierreZ con datos significa que otra transacción lo reclamó.
 const perteneceACierre = (recibo) => {
-    const cierre = recibo.NoCierre;
+    const cierre = recibo.NoCierreZ;
     if (cierre !== null && cierre !== undefined && cierre !== '' && Number(cierre) !== 0) return true;
-    return recibo.FechaCierre !== null && recibo.FechaCierre !== undefined && recibo.FechaCierre !== '';
+    return recibo.FechaCierreZ !== null && recibo.FechaCierreZ !== undefined && recibo.FechaCierreZ !== '';
 };
 
 exports.anularRecibo = async (req, res) => {
@@ -570,7 +570,7 @@ exports.anularRecibo = async (req, res) => {
         // El JOIN con `contratos` garantiza que el recibo le pertenece a ESTE
         // contrato; FOR UPDATE evita que dos anulaciones simultáneas descuenten dos veces.
         const [filas] = await connection.query(
-            `SELECT r.id, r.NoRecibo, r.MnRecibo, r.Anulado, r.NoCierre, r.FechaCierre,
+            `SELECT r.id, r.NoRecibo, r.MnRecibo, r.Anulado, r.NoCierreZ, r.FechaCierreZ,
                     c.id AS contratoId, c.mncontrato, c.mndescuento, c.mninicial, c.mnpagado, c.mnsaldo
              FROM recibopago r
              INNER JOIN contratos c ON c.NoContrato = r.NoContrato AND c.nucedula = r.NuCedula
