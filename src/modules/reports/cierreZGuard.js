@@ -5,17 +5,24 @@ const hoyVenezuela = () => new Date().toLocaleDateString('en-CA', { timeZone: 'A
 
 const aDMY = (fecha) => fecha.split('-').reverse().join('/');
 
-// Último día facturado antes de hoy que quedó sin Cierre Z ('YYYY-MM-DD'), o null.
-// Solo mira el último día facturado: los días viejos sin cerrar son
-// datos históricos y no deben bloquear.
+// 'YYYY-MM-DD' -> 'jueves 12/11/2026' (mediodía UTC para que el día no se corra)
+const fechaLarga = (fecha) =>
+    `${new Date(`${fecha}T12:00:00Z`).toLocaleDateString('es-VE', { weekday: 'long', timeZone: 'UTC' })} ${aDMY(fecha)}`;
+
+// Último día con movimientos (recibos o depósitos) antes de hoy que quedó sin
+// Cierre Z ('YYYY-MM-DD'), o null. Los días sin trabajo (domingos, feriados)
+// no tienen movimientos y se saltan solos. Solo mira ese último día: los días
+// viejos sin cerrar son datos históricos y no deben bloquear. BD nueva sin
+// movimientos: fecha queda NULL y no pide nada.
 const fechaPendienteZ = async (hoy) => {
     const [pendiente] = await db.query(
-        `SELECT DATE_FORMAT(FeRecibo, '%Y-%m-%d') AS fecha
-         FROM recibopago
-         WHERE FeRecibo = (SELECT MAX(FeRecibo) FROM recibopago WHERE FeRecibo < ?)
-           AND (NoCierreZ IS NULL OR NoCierreZ = 0)
-         LIMIT 1`,
-        [hoy]
+        `SELECT DATE_FORMAT(u.fecha, '%Y-%m-%d') AS fecha
+         FROM (SELECT GREATEST(COALESCE(r.f, d.f), COALESCE(d.f, r.f)) AS fecha
+               FROM (SELECT MAX(FeRecibo) AS f FROM recibopago WHERE FeRecibo < ?) r,
+                    (SELECT MAX(Fecha) AS f FROM depositos WHERE Fecha < ?) d) u
+         WHERE EXISTS (SELECT 1 FROM recibopago WHERE FeRecibo = u.fecha AND (NoCierreZ IS NULL OR NoCierreZ = 0))
+            OR EXISTS (SELECT 1 FROM depositos WHERE Fecha = u.fecha AND (NoCierreZ IS NULL OR NoCierreZ = 0))`,
+        [hoy, hoy]
     );
     return pendiente.length > 0 ? pendiente[0].fecha : null;
 };
@@ -34,7 +41,7 @@ const exigirCierreZ = async (req, res, next) => {
                 status: 'error',
                 code: 'CIERRE_Z_PENDIENTE',
                 fecha: pendiente,
-                message: `No se realizó el Cierre Z del ${aDMY(pendiente)}. Debe generarlo antes de facturar.`
+                message: `No se ha hecho el Cierre Z del ${fechaLarga(pendiente)}. Debe generarlo antes de continuar.`
             });
         }
 
@@ -58,4 +65,4 @@ const exigirCierreZ = async (req, res, next) => {
     }
 };
 
-module.exports = { exigirCierreZ, fechaPendienteZ, hoyVenezuela, aDMY };
+module.exports = { exigirCierreZ, fechaPendienteZ, hoyVenezuela, aDMY, fechaLarga };
